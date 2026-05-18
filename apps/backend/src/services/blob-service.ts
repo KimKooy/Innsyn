@@ -28,7 +28,9 @@ function requireClient() {
 }
 
 const UPLOAD_TTL_MINUTES = 15;
-const DOWNLOAD_TTL_MINUTES = 60;
+// Short download TTL so soft-deleted assets become unreachable quickly even
+// if a stale URL is held. Frontend re-signs per click of the details panel.
+const DOWNLOAD_TTL_MINUTES = 15;
 
 type SignedUrl = {
   url: string;

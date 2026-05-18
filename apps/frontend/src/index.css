@@ -12,3 +12,12 @@
     @apply bg-soft text-ink font-sans antialiased;
   }
 }
+
+/* Force crosshair cursor on the entire scene area while the user is in
+   asset-placement mode. The ArcGIS canvas has its own cursor declarations
+   so we use a descendant selector with !important. */
+.placing-asset,
+.placing-asset canvas,
+.placing-asset arcgis-scene {
+  cursor: crosshair !important;
+}

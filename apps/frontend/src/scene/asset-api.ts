@@ -5,7 +5,7 @@ import type {
   CreateAssetResponse,
 } from '@innsyn/shared';
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '') as string;
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}/api${path}`, {
@@ -15,7 +15,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     let detail = '';
     try {
-      const body = await res.json();
+      const body = (await res.json()) as { error?: { message?: string } };
       detail = body?.error?.message ?? '';
     } catch {
       detail = await res.text().catch(() => '');
@@ -42,6 +42,10 @@ export function listAssetsForScene(sceneId: string): Promise<{ assets: AssetDTO[
 
 export function createAsset(input: CreateAssetInput): Promise<CreateAssetResponse> {
   return apiFetch('/assets', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function finalizeAsset(assetId: string): Promise<{ asset: AssetDTO }> {
+  return apiFetch(`/assets/${encodeURIComponent(assetId)}/finalize`, { method: 'POST' });
 }
 
 export function getDownloadUrl(assetId: string): Promise<AssetDownloadResponse> {

@@ -18,8 +18,12 @@ const schema = z.object({
 
 const parsed = schema.safeParse(process.env);
 if (!parsed.success) {
-  // eslint-disable-next-line no-console
-  console.error('Invalid environment variables:', parsed.error.flatten().fieldErrors);
+  // The Pino logger isn't constructed yet (it depends on config.LOG_LEVEL),
+  // so write directly to stderr instead of console.* to stay consistent with
+  // the "no console.log" rule.
+  process.stderr.write(
+    `Invalid environment variables: ${JSON.stringify(parsed.error.flatten().fieldErrors)}\n`,
+  );
   process.exit(1);
 }
 

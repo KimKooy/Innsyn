@@ -25,7 +25,7 @@ export function App() {
         activeSceneId={activeSceneId}
         onSelectScene={setActiveSceneId}
       />
-      <main className="flex-1 relative">
+      <main className={`flex-1 relative ${assets.placeMode ? 'placing-asset' : ''}`}>
         {activeScene ? (
           <>
             <SceneViewer scene={activeScene} onViewChange={setView} />

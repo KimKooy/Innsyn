@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CreateAssetInput, ScenePosition } from '@innsyn/shared';
 
 type Props = {
@@ -11,16 +11,39 @@ type Props = {
   ) => Promise<void>;
 };
 
+const MAX_FILE_BYTES = 200 * 1024 * 1024;
+
 export function AssetUploadModal({ sceneId, position, onCancel, onUpload }: Props) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const firstFieldRef = useRef<HTMLInputElement>(null);
+
+  // Focus first field on mount + Escape to cancel
+  useEffect(() => {
+    firstFieldRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !submitting) {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onCancel, submitting]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!file || !title.trim()) return;
+    if (file.size > MAX_FILE_BYTES) {
+      setError(
+        `Filen er ${(file.size / 1024 / 1024).toFixed(1)} MB — maks tillatt er ${MAX_FILE_BYTES / 1024 / 1024} MB.`,
+      );
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -39,12 +62,24 @@ export function AssetUploadModal({ sceneId, position, onCancel, onUpload }: Prop
   };
 
   return (
-    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="asset-upload-title"
+      className="absolute inset-0 z-20 flex items-center justify-center bg-black/40"
+      onClick={(e) => {
+        if (e.target === dialogRef.current && !submitting) onCancel();
+      }}
+    >
       <form
         onSubmit={submit}
         className="bg-white rounded-lg shadow-xl border border-line w-full max-w-md mx-4 p-5"
+        onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-base font-semibold mb-3">Nytt asset</h2>
+        <h2 id="asset-upload-title" className="text-base font-semibold mb-3">
+          Nytt asset
+        </h2>
         <div className="text-xs text-ink/60 mb-4">
           Posisjon: x={position.x.toFixed(2)}, y={position.y.toFixed(2)}, z=
           {position.z.toFixed(2)}
@@ -52,12 +87,12 @@ export function AssetUploadModal({ sceneId, position, onCancel, onUpload }: Prop
         <label className="block text-sm mb-3">
           <span className="text-ink/70">Tittel</span>
           <input
+            ref={firstFieldRef}
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             required
             maxLength={200}
-            autoFocus
             className="mt-1 w-full rounded border border-line px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/40"
           />
         </label>
@@ -72,10 +107,12 @@ export function AssetUploadModal({ sceneId, position, onCancel, onUpload }: Prop
           />
         </label>
         <label className="block text-sm mb-4">
-          <span className="text-ink/70">Fil</span>
+          <span className="text-ink/70">
+            Fil <span className="text-ink/50">(maks {MAX_FILE_BYTES / 1024 / 1024} MB)</span>
+          </span>
           <input
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,application/acad,application/dxf,model/*"
+            accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,application/x-dwg,image/vnd.dwg,application/dxf,model/gltf-binary,model/gltf+json"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             required
             className="mt-1 block w-full text-sm"

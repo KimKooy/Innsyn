@@ -10,6 +10,7 @@ import {
   ApiError,
   createAsset,
   deleteAsset,
+  finalizeAsset,
   listAssetsForScene,
   uploadToBlob,
 } from './asset-api';
@@ -55,6 +56,12 @@ export function useSceneAssets(view: SceneView | null, sceneId: string) {
   const [pendingPosition, setPendingPosition] = useState<ScenePosition | null>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const layerRef = useRef<GraphicsLayer | null>(null);
+  // placeMode lives in a ref too so the view.on('click') listener doesn't
+  // need to be re-attached every time the user toggles the toolbar button.
+  const placeModeRef = useRef(false);
+  useEffect(() => {
+    placeModeRef.current = placeMode;
+  }, [placeMode]);
 
   // Wire up a dedicated GraphicsLayer for asset markers when the view appears.
   useEffect(() => {
@@ -104,29 +111,33 @@ export function useSceneAssets(view: SceneView | null, sceneId: string) {
     }
   }, [assets, view]);
 
-  // Click handler: place mode captures position, otherwise click selects an asset.
+  // Click handler: attached ONCE per view (placeMode read via ref so toggling
+  // it doesn't tear down the listener).
   useEffect(() => {
     if (!view) return;
+    const layer = layerRef.current;
     const handle = view.on('click', async (event) => {
-      if (placeMode) {
+      if (placeModeRef.current) {
         const p = event.mapPoint;
         if (!p) return;
         setPendingPosition({ x: p.x, y: p.y, z: p.z ?? 0 });
         setPlaceMode(false);
         return;
       }
-      // Otherwise, select asset if the click hit one of our markers
       const hit = await view.hitTest(event);
+      // Reference-equality check on the layer instance is more robust than
+      // matching layer.id (in case a future webscene also exposes a layer
+      // named "innsyn-asset-markers").
       const graphicHit = hit.results.find(
-        (r) => r.type === 'graphic' && r.graphic.layer?.id === ASSET_LAYER_ID,
+        (r) => r.type === 'graphic' && r.graphic.layer === layer,
       );
       if (graphicHit && graphicHit.type === 'graphic') {
-        const id = graphicHit.graphic.attributes?.assetId;
-        if (typeof id === 'string') setSelectedAssetId(id);
+        const raw: unknown = graphicHit.graphic.attributes?.assetId;
+        if (typeof raw === 'string') setSelectedAssetId(raw);
       }
     });
     return () => handle.remove();
-  }, [view, placeMode]);
+  }, [view]);
 
   const togglePlaceMode = useCallback(() => {
     setPlaceMode((m) => !m);
@@ -152,13 +163,17 @@ export function useSceneAssets(view: SceneView | null, sceneId: string) {
       try {
         await uploadToBlob(result.uploadUrl, result.uploadHeaders, file);
       } catch (err) {
-        // The DB row exists but the blob is missing — leave a follow-up cleanup
-        // for a later sweep. Surface the error to the user.
+        // The DB row exists but the blob is missing. The row stays
+        // uploadedAt=null and stays hidden from list/download. A later sweep
+        // job can GC orphans. Re-throw so the modal surfaces the error.
         throw err;
       }
-      setAssets((curr) => [result.asset, ...curr]);
+      // Tell the backend the blob is in place — it flips uploadedAt and the
+      // asset becomes visible to list/download.
+      const finalized = await finalizeAsset(result.asset.id);
+      setAssets((curr) => [finalized.asset, ...curr]);
       setPendingPosition(null);
-      setSelectedAssetId(result.asset.id);
+      setSelectedAssetId(finalized.asset.id);
     },
     [pendingPosition],
   );

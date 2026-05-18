@@ -36,6 +36,17 @@ export function AssetDetails({ asset, onClose, onDelete }: Props) {
     };
   }, [asset.id]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
     <aside className="absolute bottom-3 right-3 z-10 w-72 max-h-[calc(100vh-7rem)] flex flex-col rounded-lg bg-white shadow-md border border-line">
       <header className="px-3 py-2 border-b border-line flex items-center justify-between">
@@ -46,7 +57,7 @@ export function AssetDetails({ asset, onClose, onDelete }: Props) {
           type="button"
           onClick={onClose}
           aria-label="Lukk panel"
-          className="text-ink/60 hover:text-ink"
+          className="text-ink/70 hover:text-ink"
         >
           ✕
         </button>

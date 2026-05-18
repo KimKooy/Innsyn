@@ -3,6 +3,7 @@ import IntegratedMeshLayer from '@arcgis/core/layers/IntegratedMeshLayer.js';
 import SpatialReference from '@arcgis/core/geometry/SpatialReference.js';
 import * as projectOperator from '@arcgis/core/geometry/operators/projectOperator.js';
 import type SceneView from '@arcgis/core/views/SceneView.js';
+import type Map from '@arcgis/core/Map.js';
 import type { SceneConfig } from './scenes.config';
 import './setup';
 
@@ -27,11 +28,13 @@ export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
 
     let cancelled = false;
     let layer: IntegratedMeshLayer | null = null;
+    // Capture the map in this closure so cleanup detaches the layer from
+    // the right Map instance even if React has already remounted the
+    // <arcgis-scene> element (via the key prop below).
+    let capturedMap: Map | null | undefined = null;
 
     const run = async () => {
       if (scene.type === 'integrated-mesh') {
-        // The view's SR can only be changed once projectOperator has loaded
-        // the projection engine.
         if (!projectOperator.isLoaded()) await projectOperator.load();
         if (cancelled) return;
         el.spatialReference = new SpatialReference({ wkid: scene.wkid });
@@ -51,6 +54,7 @@ export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
 
       const view = el.view;
       const map = view.map;
+      capturedMap = map;
       onViewChangeRef.current?.(view);
 
       if (scene.type !== 'integrated-mesh' || !map) return;
@@ -80,17 +84,22 @@ export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
     return () => {
       cancelled = true;
       onViewChangeRef.current?.(null);
-      if (layer && ref.current?.view?.map) {
-        ref.current.view.map.remove(layer);
+      if (layer && capturedMap) {
+        capturedMap.remove(layer);
+        layer.destroy();
       }
     };
   }, [scene]);
 
+  // key={scene.id} forces React to fully unmount + remount the <arcgis-scene>
+  // when the active scene changes, so the web component's destructor runs and
+  // the SceneView is recreated from scratch.
   if (scene.type === 'web-scene') {
-    return <arcgis-scene ref={ref} item-id={scene.itemId} style={sceneStyle} />;
+    return <arcgis-scene key={scene.id} ref={ref} item-id={scene.itemId} style={sceneStyle} />;
   }
   return (
     <arcgis-scene
+      key={scene.id}
       ref={ref}
       viewing-mode="local"
       ground="world-elevation"
