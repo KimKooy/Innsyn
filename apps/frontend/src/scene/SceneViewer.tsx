@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import IntegratedMeshLayer from '@arcgis/core/layers/IntegratedMeshLayer.js';
 import SpatialReference from '@arcgis/core/geometry/SpatialReference.js';
 import * as projectOperator from '@arcgis/core/geometry/operators/projectOperator.js';
+import type SceneView from '@arcgis/core/views/SceneView.js';
 import './setup';
 
 type SceneViewerProps = {
@@ -15,11 +16,18 @@ type SceneViewerProps = {
    * (ETRS89 / UTM zone 33N) which covers most of Origon's Norwegian surveys.
    */
   wkid?: number;
+  /** Called once the SceneView is ready. Called again with null on unmount. */
+  onViewChange?: (view: SceneView | null) => void;
 };
 
 const sceneStyle = { display: 'block', width: '100%', height: '100%' } as const;
 
-export function SceneViewer({ itemId, meshServiceUrl, wkid = 25833 }: SceneViewerProps) {
+export function SceneViewer({
+  itemId,
+  meshServiceUrl,
+  wkid = 25833,
+  onViewChange,
+}: SceneViewerProps) {
   const ref = useRef<HTMLArcgisSceneElement | null>(null);
 
   useEffect(() => {
@@ -54,6 +62,8 @@ export function SceneViewer({ itemId, meshServiceUrl, wkid = 25833 }: SceneViewe
       const map = view.map;
       if (!map) return;
 
+      onViewChange?.(view);
+
       layer = new IntegratedMeshLayer({ url: meshServiceUrl });
       map.add(layer);
 
@@ -78,11 +88,12 @@ export function SceneViewer({ itemId, meshServiceUrl, wkid = 25833 }: SceneViewe
 
     return () => {
       cancelled = true;
+      onViewChange?.(null);
       if (layer && ref.current?.view?.map) {
         ref.current.view.map.remove(layer);
       }
     };
-  }, [meshServiceUrl, wkid]);
+  }, [meshServiceUrl, wkid, onViewChange]);
 
   if (itemId) {
     return <arcgis-scene ref={ref} item-id={itemId} style={sceneStyle} />;
