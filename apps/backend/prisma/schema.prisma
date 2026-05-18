@@ -15,5 +15,36 @@ model User {
   createdAt   DateTime @default(now()) @map("created_at")
   lastLoginAt DateTime @default(now()) @map("last_login_at")
 
+  assets Asset[]
+
   @@map("users")
+}
+
+model Asset {
+  id          String    @id @default(uuid()) @db.Uuid
+  // sceneId references the scene short-id from the frontend scenes registry.
+  // We intentionally don't FK to a Scene table yet — Scene management will
+  // move to the DB in M5; for M4 the loose coupling lets us iterate.
+  sceneId     String    @map("scene_id")
+  title       String
+  description String?
+  fileName    String    @map("file_name")
+  contentType String    @map("content_type")
+  sizeBytes   Int       @map("size_bytes")
+  // blobPath is the relative path within AZURE_STORAGE_CONTAINER.
+  blobPath    String    @map("blob_path")
+  // Position in the scene's spatial reference. We don't store the SR here —
+  // it is determined by the scene config and validated server-side.
+  x           Float
+  y           Float
+  z           Float
+  uploadedBy  String    @map("uploaded_by") @db.Uuid
+  uploadedAt  DateTime  @default(now()) @map("uploaded_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  uploader User @relation(fields: [uploadedBy], references: [id])
+
+  @@index([sceneId])
+  @@index([deletedAt])
+  @@map("assets")
 }

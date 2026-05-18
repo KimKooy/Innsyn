@@ -8,6 +8,12 @@ const schema = z.object({
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   AUTH_TENANT_ID: z.string().optional(),
   AUTH_AUDIENCE: z.string().optional(),
+  // Azure Blob storage — required for asset upload/download.
+  // Until all three are set, /api/assets routes return 503.
+  AZURE_STORAGE_ACCOUNT_NAME: z.string().optional(),
+  AZURE_STORAGE_ACCOUNT_KEY: z.string().optional(),
+  AZURE_STORAGE_ACCOUNT_URL: z.string().url().optional(),
+  AZURE_STORAGE_CONTAINER: z.string().default('innsyn-assets'),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -20,3 +26,9 @@ if (!parsed.success) {
 export const config = parsed.data;
 
 export const authConfigured = Boolean(config.AUTH_TENANT_ID && config.AUTH_AUDIENCE);
+
+export const blobConfigured = Boolean(
+  config.AZURE_STORAGE_ACCOUNT_NAME &&
+    config.AZURE_STORAGE_ACCOUNT_KEY &&
+    config.AZURE_STORAGE_ACCOUNT_URL,
+);
