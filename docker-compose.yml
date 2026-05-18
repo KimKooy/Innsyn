@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: innsyn-postgres
+    environment:
+      POSTGRES_USER: innsyn
+      POSTGRES_PASSWORD: innsyn
+      POSTGRES_DB: innsyn
+    ports:
+      - "5432:5432"
+    volumes:
+      - innsyn-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U innsyn"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  innsyn-postgres-data:

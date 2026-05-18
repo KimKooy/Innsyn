@@ -1,0 +1,25 @@
+{
+  "name": "innsyn",
+  "version": "0.1.0",
+  "private": true,
+  "description": "3D-innsynsapp for punktskyer (SLPK) — Origon Innsyn",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --stream dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @innsyn/backend exec prisma migrate dev",
+    "db:studio": "pnpm --filter @innsyn/backend exec prisma studio"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "typescript": "^5.6.3"
+  }
+}
