@@ -3,41 +3,25 @@ import IntegratedMeshLayer from '@arcgis/core/layers/IntegratedMeshLayer.js';
 import SpatialReference from '@arcgis/core/geometry/SpatialReference.js';
 import * as projectOperator from '@arcgis/core/geometry/operators/projectOperator.js';
 import type SceneView from '@arcgis/core/views/SceneView.js';
+import type { SceneConfig } from './scenes.config';
 import './setup';
 
 type SceneViewerProps = {
-  /** AGOL Web Scene item-ID. Takes precedence over meshServiceUrl. */
-  itemId?: string;
-  /** Direct Scene Service URL for an IntegratedMesh layer. */
-  meshServiceUrl?: string;
-  /**
-   * Spatial reference WKID for the local SceneView. Required when meshServiceUrl
-   * points to a layer in a non-global projection (e.g. UTM). Defaults to 25833
-   * (ETRS89 / UTM zone 33N) which covers most of Origon's Norwegian surveys.
-   */
-  wkid?: number;
-  /** Called once the SceneView is ready. Called again with null on unmount. */
+  scene: SceneConfig;
+  /** Called once the SceneView is ready. Called again with null on unmount/scene change. */
   onViewChange?: (view: SceneView | null) => void;
 };
 
 const sceneStyle = { display: 'block', width: '100%', height: '100%' } as const;
 
-export function SceneViewer({
-  itemId,
-  meshServiceUrl,
-  wkid = 25833,
-  onViewChange,
-}: SceneViewerProps) {
+export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
   const ref = useRef<HTMLArcgisSceneElement | null>(null);
-  // Keep onViewChange out of the main effect's deps — otherwise a new callback
-  // identity from the parent would tear down and rebuild the entire scene.
   const onViewChangeRef = useRef(onViewChange);
   useEffect(() => {
     onViewChangeRef.current = onViewChange;
   }, [onViewChange]);
 
   useEffect(() => {
-    if (!meshServiceUrl) return;
     const el = ref.current;
     if (!el) return;
 
@@ -45,12 +29,13 @@ export function SceneViewer({
     let layer: IntegratedMeshLayer | null = null;
 
     const run = async () => {
-      // The view's spatial reference can only be changed once projectOperator
-      // has the projection engine loaded.
-      if (!projectOperator.isLoaded()) await projectOperator.load();
-      if (cancelled) return;
-
-      el.spatialReference = new SpatialReference({ wkid });
+      if (scene.type === 'integrated-mesh') {
+        // The view's SR can only be changed once projectOperator has loaded
+        // the projection engine.
+        if (!projectOperator.isLoaded()) await projectOperator.load();
+        if (cancelled) return;
+        el.spatialReference = new SpatialReference({ wkid: scene.wkid });
+      }
 
       while (!el.view && !cancelled) {
         await new Promise((r) => setTimeout(r, 50));
@@ -66,11 +51,11 @@ export function SceneViewer({
 
       const view = el.view;
       const map = view.map;
-      if (!map) return;
-
       onViewChangeRef.current?.(view);
 
-      layer = new IntegratedMeshLayer({ url: meshServiceUrl });
+      if (scene.type !== 'integrated-mesh' || !map) return;
+
+      layer = new IntegratedMeshLayer({ url: scene.serviceUrl });
       map.add(layer);
 
       try {
@@ -99,10 +84,10 @@ export function SceneViewer({
         ref.current.view.map.remove(layer);
       }
     };
-  }, [meshServiceUrl, wkid]);
+  }, [scene]);
 
-  if (itemId) {
-    return <arcgis-scene ref={ref} item-id={itemId} style={sceneStyle} />;
+  if (scene.type === 'web-scene') {
+    return <arcgis-scene ref={ref} item-id={scene.itemId} style={sceneStyle} />;
   }
   return (
     <arcgis-scene
