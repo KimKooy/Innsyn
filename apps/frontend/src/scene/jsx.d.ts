@@ -9,14 +9,15 @@ type ArcgisSceneAttributes = {
   'hide-attribution'?: boolean;
 };
 
-type WebComponentProps<TAttrs> = DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> &
-  TAttrs;
-
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
     interface IntrinsicElements {
-      'arcgis-scene': WebComponentProps<ArcgisSceneAttributes>;
+      'arcgis-scene': DetailedHTMLProps<
+        HTMLAttributes<HTMLArcgisSceneElement>,
+        HTMLArcgisSceneElement
+      > &
+        ArcgisSceneAttributes;
     }
   }
 }
