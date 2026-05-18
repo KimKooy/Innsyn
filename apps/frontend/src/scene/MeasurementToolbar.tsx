@@ -1,45 +1,52 @@
-import { useState } from 'react';
-import type SceneView from '@arcgis/core/views/SceneView.js';
-import DirectLineMeasurementAnalysis from '@arcgis/core/analysis/DirectLineMeasurementAnalysis.js';
+import type { ToolId } from './useSceneMeasurements';
 
 type Props = {
-  view: SceneView;
+  activeTool: ToolId | null;
+  startTool: (tool: ToolId) => void;
+  hasItems: boolean;
+  clearAll: () => void;
 };
 
-export function MeasurementToolbar({ view }: Props) {
-  const [count, setCount] = useState(0);
+const tools: { id: ToolId; label: string; hint: string }[] = [
+  { id: 'distance', label: 'Avstand', hint: 'Klikk to punkter' },
+  { id: 'area', label: 'Areal', hint: 'Klikk hjørner, dobbeltklikk for å avslutte' },
+  { id: 'volume', label: 'Volum', hint: 'Tegn polygon, juster målflate' },
+  { id: 'profile', label: 'Høydeprofil', hint: 'Tegn en linje i scenen' },
+  { id: 'slice', label: 'Klippeflate', hint: 'Klikk for å plassere kuttplan' },
+];
 
-  const addDistance = async () => {
-    const analysis = new DirectLineMeasurementAnalysis();
-    view.analyses.add(analysis);
-    setCount((c) => c + 1);
-    const av = await view.whenAnalysisView(analysis);
-    void av.place();
-  };
-
-  const clearAll = () => {
-    view.analyses.removeAll();
-    setCount(0);
-  };
-
+export function MeasurementToolbar({ activeTool, startTool, hasItems, clearAll }: Props) {
   return (
-    <div className="absolute top-3 left-3 z-10 flex gap-1 rounded-lg bg-white shadow-md border border-line p-1">
-      <button
-        type="button"
-        onClick={() => void addDistance()}
-        className="px-3 py-2 rounded text-sm font-medium text-ink hover:bg-soft"
-        title="Klikk to punkter i scenen for å måle en avstand"
-      >
-        Mål avstand
-      </button>
-      {count > 0 && (
-        <button
-          type="button"
-          onClick={clearAll}
-          className="px-3 py-2 rounded text-sm text-ink hover:bg-soft"
-        >
-          Tøm ({count})
-        </button>
+    <div className="absolute top-3 left-3 z-10 flex items-stretch gap-1 rounded-lg bg-white shadow-md border border-line p-1">
+      {tools.map((tool) => {
+        const isActive = activeTool === tool.id;
+        return (
+          <button
+            key={tool.id}
+            type="button"
+            onClick={() => startTool(tool.id)}
+            title={tool.hint}
+            className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
+              isActive
+                ? 'bg-primary text-white shadow-inner'
+                : 'text-ink hover:bg-soft'
+            }`}
+          >
+            {tool.label}
+          </button>
+        );
+      })}
+      {hasItems && (
+        <>
+          <div className="w-px bg-line mx-0.5" aria-hidden />
+          <button
+            type="button"
+            onClick={clearAll}
+            className="px-3 py-2 rounded text-sm text-ink hover:bg-soft"
+          >
+            Tøm alle
+          </button>
+        </>
       )}
     </div>
   );

@@ -3,6 +3,8 @@ import type SceneView from '@arcgis/core/views/SceneView.js';
 import { TopBar } from '@/components/TopBar';
 import { SceneViewer } from '@/scene/SceneViewer';
 import { MeasurementToolbar } from '@/scene/MeasurementToolbar';
+import { MeasurementList } from '@/scene/MeasurementList';
+import { useSceneMeasurements } from '@/scene/useSceneMeasurements';
 
 const itemId = import.meta.env.VITE_AGOL_ITEM_ID as string | undefined;
 const meshServiceUrl = import.meta.env.VITE_AGOL_SCENE_SERVICE_URL as string | undefined;
@@ -10,6 +12,7 @@ const hasScene = Boolean(itemId || meshServiceUrl);
 
 export function App() {
   const [view, setView] = useState<SceneView | null>(null);
+  const measurements = useSceneMeasurements(view);
 
   return (
     <div className="h-screen flex flex-col">
@@ -22,7 +25,17 @@ export function App() {
               meshServiceUrl={meshServiceUrl}
               onViewChange={setView}
             />
-            {view && <MeasurementToolbar view={view} />}
+            {view && (
+              <>
+                <MeasurementToolbar
+                  activeTool={measurements.activeTool}
+                  startTool={(t) => void measurements.startTool(t)}
+                  hasItems={measurements.items.length > 0}
+                  clearAll={measurements.clearAll}
+                />
+                <MeasurementList items={measurements.items} removeItem={measurements.removeItem} />
+              </>
+            )}
           </>
         ) : (
           <div className="p-8 max-w-3xl">
