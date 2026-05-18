@@ -5,6 +5,7 @@ type ArcgisSceneAttributes = {
   basemap?: string;
   ground?: string;
   zoom?: number | string;
+  'viewing-mode'?: 'global' | 'local';
   'disable-popup'?: boolean;
   'hide-attribution'?: boolean;
 };
