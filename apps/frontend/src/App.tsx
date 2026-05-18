@@ -4,7 +4,11 @@ import { TopBar } from '@/components/TopBar';
 import { SceneViewer } from '@/scene/SceneViewer';
 import { MeasurementToolbar } from '@/scene/MeasurementToolbar';
 import { MeasurementList } from '@/scene/MeasurementList';
+import { AssetToolbar } from '@/scene/AssetToolbar';
+import { AssetUploadModal } from '@/scene/AssetUploadModal';
+import { AssetDetails } from '@/scene/AssetDetails';
 import { useSceneMeasurements } from '@/scene/useSceneMeasurements';
+import { useSceneAssets } from '@/scene/useSceneAssets';
 import { defaultScene, scenes } from '@/scene/scenes.config';
 
 export function App() {
@@ -12,6 +16,7 @@ export function App() {
   const [view, setView] = useState<SceneView | null>(null);
   const activeScene = scenes.find((s) => s.id === activeSceneId);
   const measurements = useSceneMeasurements(view);
+  const assets = useSceneAssets(view, activeScene?.id ?? '');
 
   return (
     <div className="h-screen flex flex-col">
@@ -33,6 +38,28 @@ export function App() {
                   clearAll={measurements.clearAll}
                 />
                 <MeasurementList items={measurements.items} removeItem={measurements.removeItem} />
+                <AssetToolbar
+                  placeMode={assets.placeMode}
+                  onTogglePlaceMode={assets.togglePlaceMode}
+                  status={assets.status}
+                  errorMessage={assets.errorMessage}
+                  assetCount={assets.assets.length}
+                />
+                {assets.selectedAsset && (
+                  <AssetDetails
+                    asset={assets.selectedAsset}
+                    onClose={() => assets.setSelectedAssetId(null)}
+                    onDelete={(id) => assets.removeAsset(id)}
+                  />
+                )}
+                {assets.pendingPosition && (
+                  <AssetUploadModal
+                    sceneId={activeScene.id}
+                    position={assets.pendingPosition}
+                    onCancel={assets.cancelPending}
+                    onUpload={assets.upload}
+                  />
+                )}
               </>
             )}
           </>
