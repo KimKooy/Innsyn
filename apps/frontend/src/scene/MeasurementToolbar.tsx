@@ -26,6 +26,7 @@ export function MeasurementToolbar({ activeTool, startTool, hasItems, clearAll }
             type="button"
             onClick={() => startTool(tool.id)}
             title={tool.hint}
+            aria-pressed={isActive}
             className={`px-3 py-2 rounded text-sm font-medium transition-colors ${
               isActive
                 ? 'bg-primary text-white shadow-inner'

@@ -19,6 +19,9 @@ export type Measurement = {
   createdAt: string;
 };
 
+// SliceAnalysis is a tool (clipping plane), not a measurement — place() resolves
+// but av.result is undefined. formatResult returns undefined for 'slice'; the
+// list still surfaces the row so the user can remove it.
 type AnalysisViewWithPlace = {
   place: (options?: { signal?: AbortSignal }) => Promise<unknown>;
   result?: unknown;
@@ -44,54 +47,61 @@ export function useSceneMeasurements(view: SceneView | null) {
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Wipe state when the view changes (e.g. user switches scene)
+  // When the view changes (scene swap) or unmounts, abort any in-flight
+  // placement and clear analyses on the *previous* view. Closing over `view`
+  // in the cleanup captures the right instance.
   useEffect(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setItems([]);
-    setActiveTool(null);
-  }, [view]);
-
-  // Abort any pending placement when the hook unmounts
-  useEffect(
-    () => () => {
+    const previousView = view;
+    return () => {
       abortRef.current?.abort();
       abortRef.current = null;
-    },
-    [],
-  );
+      if (previousView) previousView.analyses.removeAll();
+    };
+  }, [view]);
 
   const startTool = useCallback(
     async (tool: ToolId) => {
       if (!view) return;
+
+      // Install AbortController BEFORE any await so a concurrent click can
+      // cancel us during whenAnalysisView (which is racy on slow first load).
       abortRef.current?.abort();
+      const ac = new AbortController();
+      abortRef.current = ac;
+      setActiveTool(tool);
 
       const analysis = createAnalysis(tool);
       view.analyses.add(analysis);
-      setActiveTool(tool);
 
       let av: AnalysisViewWithPlace;
       try {
         av = (await view.whenAnalysisView(analysis)) as unknown as AnalysisViewWithPlace;
       } catch {
         view.analyses.remove(analysis);
-        setActiveTool(null);
+        if (abortRef.current === ac) {
+          abortRef.current = null;
+          setActiveTool(null);
+        }
         return;
       }
 
-      const ac = new AbortController();
-      abortRef.current = ac;
+      // If a concurrent tool click landed during whenAnalysisView, bail out.
+      if (ac.signal.aborted) {
+        view.analyses.remove(analysis);
+        return;
+      }
 
       try {
         await av.place({ signal: ac.signal });
+        if (ac.signal.aborted) {
+          view.analyses.remove(analysis);
+          return;
+        }
         const formatted = formatResult(tool, av.result);
         setItems((curr) => [
           ...curr,
           {
-            id:
-              typeof crypto !== 'undefined' && 'randomUUID' in crypto
-                ? crypto.randomUUID()
-                : `m-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: crypto.randomUUID(),
             tool,
             primary: formatted?.primary,
             secondary: formatted?.secondary,
@@ -100,11 +110,12 @@ export function useSceneMeasurements(view: SceneView | null) {
           },
         ]);
       } catch {
-        // Aborted (user picked another tool or hit clear) — drop the analysis
         view.analyses.remove(analysis);
       } finally {
-        if (abortRef.current === ac) abortRef.current = null;
-        setActiveTool((curr) => (curr === tool ? null : curr));
+        if (abortRef.current === ac) {
+          abortRef.current = null;
+          setActiveTool(null);
+        }
       }
     },
     [view],
@@ -112,13 +123,13 @@ export function useSceneMeasurements(view: SceneView | null) {
 
   const removeItem = useCallback(
     (id: string) => {
-      setItems((curr) => {
-        const item = curr.find((m) => m.id === id);
-        if (item && view) view.analyses.remove(item.analysis);
-        return curr.filter((m) => m.id !== id);
-      });
+      // Resolve analysis outside setItems so React 18 StrictMode's double-
+      // invoke of the updater doesn't remove it twice from view.analyses.
+      const target = items.find((m) => m.id === id);
+      if (target && view) view.analyses.remove(target.analysis);
+      setItems((curr) => curr.filter((m) => m.id !== id));
     },
-    [view],
+    [items, view],
   );
 
   const clearAll = useCallback(() => {

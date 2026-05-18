@@ -12,6 +12,7 @@
     "test": "echo 'no tests yet'"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.31.0",
     "@innsyn/shared": "workspace:*",
     "@prisma/client": "^5.22.0",
     "cors": "^2.8.5",

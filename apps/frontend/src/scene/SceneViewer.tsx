@@ -29,6 +29,12 @@ export function SceneViewer({
   onViewChange,
 }: SceneViewerProps) {
   const ref = useRef<HTMLArcgisSceneElement | null>(null);
+  // Keep onViewChange out of the main effect's deps — otherwise a new callback
+  // identity from the parent would tear down and rebuild the entire scene.
+  const onViewChangeRef = useRef(onViewChange);
+  useEffect(() => {
+    onViewChangeRef.current = onViewChange;
+  }, [onViewChange]);
 
   useEffect(() => {
     if (!meshServiceUrl) return;
@@ -62,7 +68,7 @@ export function SceneViewer({
       const map = view.map;
       if (!map) return;
 
-      onViewChange?.(view);
+      onViewChangeRef.current?.(view);
 
       layer = new IntegratedMeshLayer({ url: meshServiceUrl });
       map.add(layer);
@@ -88,12 +94,12 @@ export function SceneViewer({
 
     return () => {
       cancelled = true;
-      onViewChange?.(null);
+      onViewChangeRef.current?.(null);
       if (layer && ref.current?.view?.map) {
         ref.current.view.map.remove(layer);
       }
     };
-  }, [meshServiceUrl, wkid, onViewChange]);
+  }, [meshServiceUrl, wkid]);
 
   if (itemId) {
     return <arcgis-scene ref={ref} item-id={itemId} style={sceneStyle} />;

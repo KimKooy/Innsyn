@@ -46,7 +46,7 @@ export function MeasurementList({ items, removeItem }: Props) {
               <button
                 type="button"
                 onClick={() => removeItem(item.id)}
-                className="text-xs text-ink/50 hover:text-red-700"
+                className="text-xs text-ink/70 hover:text-red-700"
                 aria-label="Fjern måling"
               >
                 Fjern
