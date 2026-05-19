@@ -10,6 +10,14 @@ type ArcgisSceneAttributes = {
   'hide-attribution'?: boolean;
 };
 
+type ArcgisElevationProfileAttributes = {
+  'hide-clear-button'?: boolean;
+  'hide-details-button'?: boolean;
+  'hide-legend-button'?: boolean;
+  'hide-settings-button'?: boolean;
+  'reference-element'?: string;
+};
+
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace JSX {
@@ -19,6 +27,11 @@ declare global {
         HTMLArcgisSceneElement
       > &
         ArcgisSceneAttributes;
+      'arcgis-elevation-profile': DetailedHTMLProps<
+        HTMLAttributes<HTMLArcgisElevationProfileElement>,
+        HTMLArcgisElevationProfileElement
+      > &
+        ArcgisElevationProfileAttributes;
     }
   }
 }

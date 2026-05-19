@@ -1,6 +1,7 @@
 import esriConfig from '@arcgis/core/config.js';
 import { setAssetPath } from '@arcgis/map-components';
 import '@arcgis/map-components/components/arcgis-scene';
+import '@arcgis/map-components/components/arcgis-elevation-profile';
 
 const ARCGIS_VERSION = '5.0';
 

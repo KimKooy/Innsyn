@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type SceneView from '@arcgis/core/views/SceneView.js';
+import type ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
 import { TopBar } from '@/components/TopBar';
 import { SceneViewer } from '@/scene/SceneViewer';
 import { MeasurementToolbar } from '@/scene/MeasurementToolbar';
 import { MeasurementList } from '@/scene/MeasurementList';
+import { ElevationProfilePanel } from '@/scene/ElevationProfilePanel';
 import { AssetToolbar } from '@/scene/AssetToolbar';
 import { AssetUploadModal } from '@/scene/AssetUploadModal';
 import { AssetDetails } from '@/scene/AssetDetails';
@@ -17,6 +19,15 @@ export function App() {
   const activeScene = scenes.find((s) => s.id === activeSceneId);
   const measurements = useSceneMeasurements(view);
   const assets = useSceneAssets(view, activeScene?.id ?? '');
+
+  // The most-recent profile measurement drives the elevation-profile widget.
+  const lastProfile = useMemo(() => {
+    for (let i = measurements.items.length - 1; i >= 0; i--) {
+      const item = measurements.items[i];
+      if (item?.tool === 'profile') return item;
+    }
+    return undefined;
+  }, [measurements.items]);
 
   return (
     <div className="h-screen flex flex-col">
@@ -38,6 +49,13 @@ export function App() {
                   clearAll={measurements.clearAll}
                 />
                 <MeasurementList items={measurements.items} removeItem={measurements.removeItem} />
+                {lastProfile && (
+                  <ElevationProfilePanel
+                    view={view}
+                    analysis={lastProfile.analysis as ElevationProfileAnalysis}
+                    onClose={() => measurements.removeItem(lastProfile.id)}
+                  />
+                )}
                 <AssetToolbar
                   placeMode={assets.placeMode}
                   onTogglePlaceMode={assets.togglePlaceMode}
