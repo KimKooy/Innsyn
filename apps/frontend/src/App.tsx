@@ -5,6 +5,7 @@ import { TopBar } from '@/components/TopBar';
 import { SceneViewer } from '@/scene/SceneViewer';
 import { MeasurementToolbar } from '@/scene/MeasurementToolbar';
 import { MeasurementList } from '@/scene/MeasurementList';
+import { ToolHint } from '@/scene/ToolHint';
 import { ElevationProfilePanel } from '@/scene/ElevationProfilePanel';
 import { AssetToolbar } from '@/scene/AssetToolbar';
 import { AssetUploadModal } from '@/scene/AssetUploadModal';
@@ -49,6 +50,7 @@ export function App() {
                   clearAll={measurements.clearAll}
                 />
                 <MeasurementList items={measurements.items} removeItem={measurements.removeItem} />
+                <ToolHint tool={measurements.activeTool} />
                 {lastProfile && (
                   <ElevationProfilePanel
                     view={view}
