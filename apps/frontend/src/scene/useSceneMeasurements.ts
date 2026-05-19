@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type SceneView from '@arcgis/core/views/SceneView.js';
 import type Analysis from '@arcgis/core/analysis/Analysis.js';
+import type PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
 import DirectLineMeasurementAnalysis from '@arcgis/core/analysis/DirectLineMeasurementAnalysis.js';
 import AreaMeasurementAnalysis from '@arcgis/core/analysis/AreaMeasurementAnalysis.js';
 import VolumeMeasurementAnalysis from '@arcgis/core/analysis/VolumeMeasurementAnalysis.js';
 import ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
 import ElevationProfileLineScene from '@arcgis/core/analysis/ElevationProfile/ElevationProfileLineScene.js';
 import ElevationProfileLineGround from '@arcgis/core/analysis/ElevationProfile/ElevationProfileLineGround.js';
+import ElevationProfileLineQuery from '@arcgis/core/analysis/ElevationProfile/ElevationProfileLineQuery.js';
 import SliceAnalysis from '@arcgis/core/analysis/SliceAnalysis.js';
+import { PointCloudElevationSource } from './PointCloudElevationSource';
 import { formatResult, type FormattedMeasurement } from './measurement-format';
 
 export type ToolId = 'distance' | 'area' | 'volume' | 'profile' | 'slice';
@@ -21,16 +24,39 @@ export type Measurement = {
   createdAt: string;
 };
 
-// SliceAnalysis is a tool (clipping plane), not a measurement — place() resolves
-// but av.result is undefined. formatResult returns undefined for 'slice'; the
-// list still surfaces the row so the user can remove it. ElevationProfileAnalysis
-// is similar — its "result" is the chart, not a numeric measurement.
 type AnalysisViewWithPlace = {
   place: (options?: { signal?: AbortSignal }) => Promise<unknown>;
   result?: unknown;
 };
 
-function createAnalysis(tool: ToolId): Analysis {
+function buildProfileAnalysis(view: SceneView): ElevationProfileAnalysis {
+  const analysis = new ElevationProfileAnalysis({
+    profiles: [
+      new ElevationProfileLineScene({ title: 'Mesh', color: [28, 181, 168] }),
+      new ElevationProfileLineGround({ title: 'Terreng', color: [154, 166, 173] }),
+    ],
+  });
+
+  // Esri's built-in ElevationProfileLineScene does NOT sample point clouds
+  // (only volumetric layers like IntegratedMesh / SceneLayer). For each
+  // PointCloudLayer in the scene, add a custom query line whose source does
+  // a hitTest-per-sample against the layer.
+  view.map?.allLayers.forEach((layer) => {
+    if (layer.type !== 'point-cloud') return;
+    const pcLayer = layer as PointCloudLayer;
+    analysis.profiles.push(
+      new ElevationProfileLineQuery({
+        title: `Punktsky${pcLayer.title ? ` · ${pcLayer.title}` : ''}`,
+        color: [219, 51, 74],
+        source: new PointCloudElevationSource(view, pcLayer),
+      }),
+    );
+  });
+
+  return analysis;
+}
+
+function createAnalysis(tool: ToolId, view: SceneView): Analysis {
   switch (tool) {
     case 'distance':
       return new DirectLineMeasurementAnalysis();
@@ -39,14 +65,7 @@ function createAnalysis(tool: ToolId): Analysis {
     case 'volume':
       return new VolumeMeasurementAnalysis();
     case 'profile':
-      // The analysis needs profile-line configs or it computes nothing and
-      // the chart in <arcgis-elevation-profile> stays empty.
-      return new ElevationProfileAnalysis({
-        profiles: [
-          new ElevationProfileLineScene({ title: 'Mesh', color: [28, 181, 168] }),
-          new ElevationProfileLineGround({ title: 'Terreng', color: [154, 166, 173] }),
-        ],
-      });
+      return buildProfileAnalysis(view);
     case 'slice':
       return new SliceAnalysis();
   }
@@ -57,8 +76,6 @@ export function useSceneMeasurements(view: SceneView | null) {
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // When the view changes (scene swap) or unmounts, abort any in-flight
-  // placement and clear analyses on the *previous* view.
   useEffect(() => {
     const previousView = view;
     return () => {
@@ -77,13 +94,9 @@ export function useSceneMeasurements(view: SceneView | null) {
       abortRef.current = ac;
       setActiveTool(tool);
 
-      const analysis = createAnalysis(tool);
+      const analysis = createAnalysis(tool, view);
       view.analyses.add(analysis);
 
-      // Profile is a special case: the result is a chart, not a number, so we
-      // add the list entry IMMEDIATELY. That mounts the elevation-profile
-      // widget so the user can see the chart populate live while they draw,
-      // and gives them the widget's own UI hints (e.g. "Done" button).
       const earlyItemId = tool === 'profile' ? crypto.randomUUID() : null;
       if (earlyItemId) {
         setItems((curr) => [
@@ -127,11 +140,7 @@ export function useSceneMeasurements(view: SceneView | null) {
           removeEarlyItem();
           return;
         }
-        if (tool === 'profile') {
-          // The early item already holds the analysis — chart updates from
-          // analysis.result automatically through the widget binding.
-          return;
-        }
+        if (tool === 'profile') return;
         const formatted = formatResult(tool, av.result);
         setItems((curr) => [
           ...curr,
