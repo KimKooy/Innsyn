@@ -1,7 +1,9 @@
 import type SceneView from '@arcgis/core/views/SceneView.js';
 import type PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
-import Point from '@arcgis/core/geometry/Point.js';
+import type { PointCloudLayerView } from '@arcgis/core/views/layers/PointCloudLayerView.js';
 import Multipoint from '@arcgis/core/geometry/Multipoint.js';
+import Extent from '@arcgis/core/geometry/Extent.js';
+import type Point from '@arcgis/core/geometry/Point.js';
 import type {
   ElevationQueryOptions,
   ElevationQueryResult,
@@ -9,22 +11,22 @@ import type {
 
 /**
  * Custom elevation source for ElevationProfileLineQuery that samples
- * z-values from a PointCloudLayer using SceneView.hitTest.
+ * z-values from a PointCloudLayer using PointCloudLayerView.queryFeatures.
  *
- * Limitations of this hitTest-based approach:
- *   - Sampling ray follows the camera's view direction, not strictly
- *     vertical. Top-down views give the best results; at heavy tilt the
- *     sampled point may be off-laterally from the requested (x,y).
- *   - Samples outside the current view frustum return noDataValue.
- *   - One hitTest per sample → for many samples on a long polyline the
- *     query is sequential and can take a few seconds.
- *
- * A more correct implementation would traverse the SLPK's i3s node tree
- * directly (REST) and query points within a vertical column around each
- * sample. We can swap to that later — the ElevationProfileLineQuery
- * source contract stays the same.
+ * For each (x,y) sample we run a spatial query against a tiny extent
+ * around the point and pick the topmost z value of the points returned.
+ * This is a TRUE vertical query (no camera-ray dependence), so accuracy
+ * is independent of view tilt — but it only sees points the layer view
+ * has streamed to the client at the current LOD. Zoom in for denser
+ * sampling if the chart looks gappy.
  */
+
+const SAMPLE_RADIUS_METERS = 1.5;
+const NO_DATA = -32768;
+
 export class PointCloudElevationSource {
+  private layerViewPromise: Promise<PointCloudLayerView> | null = null;
+
   constructor(
     private readonly view: SceneView,
     private readonly layer: PointCloudLayer,
@@ -34,11 +36,13 @@ export class PointCloudElevationSource {
     geometry: Multipoint,
     options?: ElevationQueryOptions,
   ): Promise<ElevationQueryResult<Multipoint>> {
-    const noDataValue = -32768;
+    const noDataValue = options?.noDataValue ?? NO_DATA;
     const signal = options?.signal;
     const sr = geometry.spatialReference;
-    const out: number[][] = [];
 
+    const layerView = await this.getLayerView();
+
+    const out: number[][] = [];
     for (const pt of geometry.points) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       const x = pt[0];
@@ -47,53 +51,56 @@ export class PointCloudElevationSource {
         out.push([0, 0, noDataValue]);
         continue;
       }
-      const z = await this.sampleAt(x, y, sr);
+      const z = await this.sampleAt(layerView, x, y, sr, signal);
       out.push([x, y, z ?? noDataValue]);
     }
 
-    const result = new Multipoint({
-      points: out,
-      hasZ: true,
-      spatialReference: sr,
-    });
+    return {
+      geometry: new Multipoint({
+        points: out,
+        hasZ: true,
+        spatialReference: sr,
+      }),
+      noDataValue,
+    };
+  }
 
-    return { geometry: result, noDataValue };
+  private getLayerView() {
+    if (!this.layerViewPromise) {
+      this.layerViewPromise = this.view.whenLayerView(this.layer) as Promise<PointCloudLayerView>;
+    }
+    return this.layerViewPromise;
   }
 
   private async sampleAt(
+    layerView: PointCloudLayerView,
     x: number,
     y: number,
     spatialReference: Multipoint['spatialReference'],
+    signal: AbortSignal | null | undefined,
   ): Promise<number | null> {
-    // Project (x, y) at a high z so the screen position approximates
-    // a top-of-frustum point. The hitTest ray runs from that screen
-    // position toward whatever is under the camera ray.
-    const probe = new Point({
-      x,
-      y,
-      z: 10000,
-      hasZ: true,
+    const query = layerView.createQuery();
+    query.geometry = new Extent({
+      xmin: x - SAMPLE_RADIUS_METERS,
+      ymin: y - SAMPLE_RADIUS_METERS,
+      xmax: x + SAMPLE_RADIUS_METERS,
+      ymax: y + SAMPLE_RADIUS_METERS,
       spatialReference,
     });
-    const screen = this.view.toScreen(probe);
-    if (!screen) return null;
-    // Reject samples that land outside the visible canvas.
-    if (
-      screen.x < 0 ||
-      screen.y < 0 ||
-      screen.x > this.view.width ||
-      screen.y > this.view.height
-    ) {
-      return null;
-    }
+    query.spatialRelationship = 'intersects';
+    query.returnGeometry = true;
 
-    const hit = await this.view.hitTest(screen, { include: [this.layer] });
-    const pcHit = hit.results.find(
-      (r) => r.type === 'graphic' && r.graphic.layer === this.layer,
+    const result = await layerView.queryFeatures(
+      query,
+      signal ? { signal } : undefined,
     );
-    if (pcHit && pcHit.type === 'graphic' && pcHit.mapPoint) {
-      return pcHit.mapPoint.z ?? null;
+    let topZ: number | null = null;
+    for (const feature of result.features) {
+      const z = (feature.geometry as Point | null)?.z;
+      if (typeof z === 'number' && (topZ === null || z > topZ)) {
+        topZ = z;
+      }
     }
-    return null;
+    return topZ;
   }
 }
