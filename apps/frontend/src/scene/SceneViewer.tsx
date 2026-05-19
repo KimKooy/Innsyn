@@ -1,10 +1,13 @@
 import { useEffect, useRef } from 'react';
 import IntegratedMeshLayer from '@arcgis/core/layers/IntegratedMeshLayer.js';
+import PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
 import SpatialReference from '@arcgis/core/geometry/SpatialReference.js';
+import Extent from '@arcgis/core/geometry/Extent.js';
 import * as projectOperator from '@arcgis/core/geometry/operators/projectOperator.js';
 import type SceneView from '@arcgis/core/views/SceneView.js';
 import type Map from '@arcgis/core/Map.js';
-import type { SceneConfig } from './scenes.config';
+import type Layer from '@arcgis/core/layers/Layer.js';
+import type { SceneConfig, SceneLayerSpec } from './scenes.config';
 import './setup';
 
 type SceneViewerProps = {
@@ -14,6 +17,25 @@ type SceneViewerProps = {
 };
 
 const sceneStyle = { display: 'block', width: '100%', height: '100%' } as const;
+
+function createLayer(spec: SceneLayerSpec): Layer {
+  switch (spec.type) {
+    case 'integrated-mesh':
+      return new IntegratedMeshLayer({ url: spec.url, title: spec.title });
+    case 'point-cloud':
+      return new PointCloudLayer({ url: spec.url, title: spec.title });
+  }
+}
+
+function unionExtent(layers: Layer[]): Extent | null {
+  let combined: Extent | null = null;
+  for (const layer of layers) {
+    const ext = layer.fullExtent;
+    if (!ext) continue;
+    combined = combined ? combined.union(ext) : ext.clone();
+  }
+  return combined;
+}
 
 export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
   const ref = useRef<HTMLArcgisSceneElement | null>(null);
@@ -27,14 +49,11 @@ export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
     if (!el) return;
 
     let cancelled = false;
-    let layer: IntegratedMeshLayer | null = null;
-    // Capture the map in this closure so cleanup detaches the layer from
-    // the right Map instance even if React has already remounted the
-    // <arcgis-scene> element (via the key prop below).
+    let addedLayers: Layer[] = [];
     let capturedMap: Map | null | undefined = null;
 
     const run = async () => {
-      if (scene.type === 'integrated-mesh') {
+      if (scene.type === 'local') {
         if (!projectOperator.isLoaded()) await projectOperator.load();
         if (cancelled) return;
         el.spatialReference = new SpatialReference({ wkid: scene.wkid });
@@ -57,21 +76,24 @@ export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
       capturedMap = map;
       onViewChangeRef.current?.(view);
 
-      if (scene.type !== 'integrated-mesh' || !map) return;
+      if (scene.type !== 'local' || !map) return;
 
-      layer = new IntegratedMeshLayer({ url: scene.serviceUrl });
-      map.add(layer);
+      addedLayers = scene.layers.map(createLayer);
+      for (const layer of addedLayers) map.add(layer);
 
       try {
-        await layer.when();
+        await Promise.all(addedLayers.map((l) => l.when()));
       } catch {
         return;
       }
-      if (cancelled || !layer?.fullExtent) return;
+      if (cancelled) return;
+
+      const combined = unionExtent(addedLayers);
+      if (!combined) return;
 
       try {
         await view.goTo(
-          { target: layer.fullExtent, tilt: 65, heading: 30 },
+          { target: combined, tilt: 65, heading: 30 },
           { duration: 1500 },
         );
       } catch {
@@ -84,9 +106,11 @@ export function SceneViewer({ scene, onViewChange }: SceneViewerProps) {
     return () => {
       cancelled = true;
       onViewChangeRef.current?.(null);
-      if (layer && capturedMap) {
-        capturedMap.remove(layer);
-        layer.destroy();
+      if (capturedMap) {
+        for (const layer of addedLayers) {
+          capturedMap.remove(layer);
+          layer.destroy();
+        }
       }
     };
   }, [scene]);
