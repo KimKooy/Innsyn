@@ -37,9 +37,14 @@ function UserChip() {
         {display}
       </span>
       {me.status === 'error' && (
-        <span className="text-red-700 text-xs" title={me.message}>
-          (API: feil)
-        </span>
+        // Subtle indicator — /api/me failing usually means the backend's DB
+        // isn't up yet, which is expected during local dev. Hover for the
+        // actual error.
+        <span
+          className="inline-block h-2 w-2 rounded-full bg-amber-500"
+          title={`API: ${me.message}`}
+          aria-label="API utilgjengelig"
+        />
       )}
       <button
         type="button"
