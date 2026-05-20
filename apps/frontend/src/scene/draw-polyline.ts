@@ -16,16 +16,19 @@ import LineSymbol3DLayer from '@arcgis/core/symbols/LineSymbol3DLayer.js';
  *   - As the user moves the cursor, hitTest filtered to the point-cloud
  *     layers reports the topmost splat under the pointer. A yellow ring
  *     follows that splat in 3D — preview of where the next click lands.
- *   - Left-click commits a vertex AT the snap point (not at the camera-
- *     ray-vs-ground intersection like Esri's place() does). If there's no
- *     snap target under the cursor, the click is ignored.
- *   - A teal preview segment is drawn from the last committed vertex to
- *     the current snap target.
- *   - Double-click finishes the polyline; Escape cancels.
- *
- * Replaces ElevationProfileAnalysisView3D.place() when the active scene
- * contains a PointCloudLayer. Returns the finished polyline so the
- * caller can set analysis.geometry directly.
+ *   - "Sticky snap": if hitTest momentarily returns no result (camera ray
+ *     hits a gap between splats) we keep the last good snap visible as
+ *     long as the cursor has moved less than STICKY_PX pixels — avoids
+ *     the ring flickering off as the user moves the mouse.
+ *   - Left-click commits a vertex AT the snap point. To make the profile
+ *     follow the cloud's curvature even with few clicks, the segment
+ *     between the previous vertex and the new one is auto-densified:
+ *     every ~DENSIFY_SPACING_M meters along the line we project the
+ *     midpoint to screen, hitTest it, and add the snapped result as an
+ *     intermediate vertex. Only the user's actual clicks are shown as
+ *     visible dots; the densified vertices are silent.
+ *   - Double-click finishes the polyline (≥2 user clicks required).
+ *     Escape cancels. AbortSignal supported for outside-driven cancel.
  */
 
 type Vertex = { x: number; y: number; z: number };
@@ -34,14 +37,17 @@ const TEAL = [28, 181, 168] as const;
 const SNAP_YELLOW = [255, 220, 0] as const;
 const SNAP_ORANGE = [255, 140, 0] as const;
 
+const STICKY_PX = 24;
+const DENSIFY_SPACING_M = 0.5;
+
 function snapSymbol() {
   return new PointSymbol3D({
     symbolLayers: [
       new IconSymbol3DLayer({
-        size: 14,
+        size: 16,
         resource: { primitive: 'circle' },
         material: { color: [...SNAP_YELLOW, 0.55] },
-        outline: { color: [...SNAP_ORANGE, 1], size: 2.5 },
+        outline: { color: [...SNAP_ORANGE, 1], size: 3 },
       }),
     ],
   });
@@ -80,8 +86,11 @@ export async function drawPolylineWithPointCloudSnap(
   if (!map) throw new Error('SceneView.map is not available');
   const sr = view.spatialReference;
 
-  const vertices: Vertex[] = [];
+  const userClicks: Vertex[] = []; // ones the user clicked (rendered as dots)
+  const allVertices: Vertex[] = []; // user clicks + auto-densified samples
   let snapped: Vertex | null = null;
+  let lastGoodSnap: Vertex | null = null;
+  let lastGoodSnapScreen: { x: number; y: number } | null = null;
   let lastHitSeq = 0;
 
   const tempLayer = new GraphicsLayer({ listMode: 'hide' });
@@ -111,7 +120,7 @@ export async function drawPolylineWithPointCloudSnap(
   function rebuildVertexGraphics() {
     for (const g of vertexGraphics) tempLayer.remove(g);
     vertexGraphics.length = 0;
-    for (const v of vertices) {
+    for (const v of userClicks) {
       const g = new Graphic({ geometry: pointGeometry(v), symbol: vertexSymbol() });
       vertexGraphics.push(g);
       tempLayer.add(g);
@@ -119,12 +128,12 @@ export async function drawPolylineWithPointCloudSnap(
   }
 
   function refreshCommittedLine() {
-    if (vertices.length < 2) {
+    if (allVertices.length < 2) {
       setIncluded(committedLineGraphic, false);
       return;
     }
     committedLineGraphic.geometry = new Polyline({
-      paths: [vertices.map((v) => [v.x, v.y, v.z])],
+      paths: [allVertices.map((v) => [v.x, v.y, v.z])],
       hasZ: true,
       spatialReference: sr,
     });
@@ -132,11 +141,11 @@ export async function drawPolylineWithPointCloudSnap(
   }
 
   function refreshPreview() {
-    if (vertices.length === 0 || !snapped) {
+    if (allVertices.length === 0 || !snapped) {
       setIncluded(previewLineGraphic, false);
       return;
     }
-    const last = vertices[vertices.length - 1]!;
+    const last = allVertices[allVertices.length - 1]!;
     previewLineGraphic.geometry = new Polyline({
       paths: [[[last.x, last.y, last.z], [snapped.x, snapped.y, snapped.z]]],
       hasZ: true,
@@ -152,6 +161,74 @@ export async function drawPolylineWithPointCloudSnap(
     }
     snapGraphic.geometry = pointGeometry(snapped);
     setIncluded(snapGraphic, true);
+  }
+
+  /**
+   * Find the topmost cloud splat at a given screen coordinate.
+   */
+  async function snapAtScreen(
+    screenX: number,
+    screenY: number,
+  ): Promise<Vertex | null> {
+    const hit = await view.hitTest(
+      { x: screenX, y: screenY },
+      { include: pcLayers },
+    );
+    const pcHit = hit.results.find(
+      (r) =>
+        r.type === 'graphic' &&
+        pcLayers.some((layer) => layer === r.graphic.layer),
+    );
+    if (pcHit?.type === 'graphic' && pcHit.mapPoint && typeof pcHit.mapPoint.z === 'number') {
+      return { x: pcHit.mapPoint.x, y: pcHit.mapPoint.y, z: pcHit.mapPoint.z };
+    }
+    return null;
+  }
+
+  /**
+   * Snap a world-coordinate (x, y) onto the cloud by projecting it to
+   * screen at z=0 and hitTest'ing there. Returns null if no splat is
+   * under the resulting pixel.
+   */
+  async function snapAtWorld(x: number, y: number): Promise<Vertex | null> {
+    const probe = new Point({ x, y, z: 0, hasZ: true, spatialReference: sr });
+    const screen = view.toScreen(probe);
+    if (!screen) return null;
+    if (
+      screen.x < 0 ||
+      screen.y < 0 ||
+      screen.x > view.width ||
+      screen.y > view.height
+    ) {
+      return null;
+    }
+    return snapAtScreen(screen.x, screen.y);
+  }
+
+  /**
+   * For the segment between `from` and `to`, insert intermediate vertices
+   * spaced ~DENSIFY_SPACING_M apart, each snapped to the cloud. Falls
+   * back to linear z interpolation when a sample can't be snapped.
+   */
+  async function densifyBetween(from: Vertex, to: Vertex): Promise<Vertex[]> {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+    if (length <= DENSIFY_SPACING_M) return [];
+    const steps = Math.floor(length / DENSIFY_SPACING_M);
+    const out: Vertex[] = [];
+    for (let k = 1; k < steps; k++) {
+      const t = k / steps;
+      const xMid = from.x + dx * t;
+      const yMid = from.y + dy * t;
+      const snap = await snapAtWorld(xMid, yMid);
+      if (snap) {
+        out.push(snap);
+      } else {
+        out.push({ x: xMid, y: yMid, z: from.z + (to.z - from.z) * t });
+      }
+    }
+    return out;
   }
 
   return new Promise<Polyline>((resolve, reject) => {
@@ -182,19 +259,21 @@ export async function drawPolylineWithPointCloudSnap(
 
     const moveHandle = view.on('pointer-move', (event) => {
       const seq = ++lastHitSeq;
-      void view.hitTest(event, { include: pcLayers }).then((hit) => {
+      const screenX = event.x;
+      const screenY = event.y;
+      void snapAtScreen(screenX, screenY).then((hit) => {
         if (seq !== lastHitSeq) return;
-        const pcHit = hit.results.find(
-          (r) =>
-            r.type === 'graphic' &&
-            pcLayers.some((layer) => layer === r.graphic.layer),
-        );
-        if (pcHit?.type === 'graphic' && pcHit.mapPoint && typeof pcHit.mapPoint.z === 'number') {
-          snapped = {
-            x: pcHit.mapPoint.x,
-            y: pcHit.mapPoint.y,
-            z: pcHit.mapPoint.z,
-          };
+        if (hit) {
+          snapped = hit;
+          lastGoodSnap = hit;
+          lastGoodSnapScreen = { x: screenX, y: screenY };
+        } else if (lastGoodSnap && lastGoodSnapScreen) {
+          // Sticky snap — keep the last good target visible if the cursor
+          // has only drifted a few pixels (likely a gap between splats).
+          const ddx = screenX - lastGoodSnapScreen.x;
+          const ddy = screenY - lastGoodSnapScreen.y;
+          const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          snapped = dist <= STICKY_PX ? lastGoodSnap : null;
         } else {
           snapped = null;
         }
@@ -208,18 +287,27 @@ export async function drawPolylineWithPointCloudSnap(
       if (event.button !== 0) return;
       if (!snapped) return; // no snap target → ignore (Pro behaviour)
       event.stopPropagation();
-      vertices.push({ ...snapped });
-      rebuildVertexGraphics();
-      refreshCommittedLine();
-      refreshPreview();
+      const commit = { ...snapped };
+      userClicks.push(commit);
+      void (async () => {
+        if (allVertices.length > 0) {
+          const previous = allVertices[allVertices.length - 1]!;
+          const intermediates = await densifyBetween(previous, commit);
+          allVertices.push(...intermediates);
+        }
+        allVertices.push(commit);
+        rebuildVertexGraphics();
+        refreshCommittedLine();
+        refreshPreview();
+      })();
     });
 
     const dblHandle = view.on('double-click', (event) => {
       if (event.button !== 0) return;
       event.stopPropagation();
-      if (vertices.length < 2) return;
+      if (userClicks.length < 2) return;
       const polyline = new Polyline({
-        paths: [vertices.map((v) => [v.x, v.y, v.z])],
+        paths: [allVertices.map((v) => [v.x, v.y, v.z])],
         hasZ: true,
         spatialReference: sr,
       });
