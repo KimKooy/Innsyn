@@ -134,9 +134,16 @@ type Props = {
   scatter?: ScatterPoint[];
   /** 'auto' fits the data to the canvas; numeric k forces v-scale = k × h-scale. */
   verticalExaggeration?: VerticalExaggeration;
+  /** Notified on cursor hover. `d` is the polyline distance in meters, or null when off the chart. */
+  onHover?: (d: number | null) => void;
 };
 
-export function ProfileChart({ polyline, scatter, verticalExaggeration = 'auto' }: Props) {
+export function ProfileChart({
+  polyline,
+  scatter,
+  verticalExaggeration = 'auto',
+  onHover,
+}: Props) {
   const scatterPoints = scatter ?? [];
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -260,10 +267,66 @@ export function ProfileChart({ polyline, scatter, verticalExaggeration = 'auto' 
   const hasData = samples.length > 0 && domain !== null;
   const plotLeft = MARGIN.left;
   const plotRight = size.width - MARGIN.right;
+  const plotTop = MARGIN.top;
   const plotBottom = size.height - MARGIN.bottom;
 
+  const [hoverD, setHoverD] = useState<number | null>(null);
+
+  // Sample at the hovered d via interpolation between adjacent dense
+  // polyline samples.
+  const hoverSample = useMemo<Sample | null>(() => {
+    if (hoverD === null || samples.length === 0) return null;
+    if (hoverD <= samples[0]!.d) return samples[0]!;
+    const last = samples[samples.length - 1]!;
+    if (hoverD >= last.d) return last;
+    // Binary search for the segment containing hoverD.
+    let lo = 0;
+    let hi = samples.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (samples[mid]!.d <= hoverD) lo = mid;
+      else hi = mid;
+    }
+    const a = samples[lo]!;
+    const b = samples[hi]!;
+    const span = b.d - a.d;
+    const t = span > 0 ? (hoverD - a.d) / span : 0;
+    return { d: hoverD, z: a.z + (b.z - a.z) * t };
+  }, [hoverD, samples]);
+
+  const xPxScale = (v: number) =>
+    plotLeft + (v / Math.max(domain?.dMax ?? 1, 1)) * Math.max(plotW, 1);
+  const yPxScale = (v: number) =>
+    plotBottom -
+    ((v - (domain?.zMin ?? 0)) / Math.max((domain?.zMax ?? 1) - (domain?.zMin ?? 0), 1)) *
+      Math.max(plotH, 1);
+
   return (
-    <div ref={containerRef} className="relative w-full h-full">
+    <div
+      ref={containerRef}
+      className="relative w-full h-full"
+      onMouseMove={(e) => {
+        if (!hasData || !containerRef.current || !domain) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        if (x < plotLeft || x > plotRight) {
+          if (hoverD !== null) {
+            setHoverD(null);
+            onHover?.(null);
+          }
+          return;
+        }
+        const d = ((x - plotLeft) / Math.max(plotW, 1)) * domain.dMax;
+        setHoverD(d);
+        onHover?.(d);
+      }}
+      onMouseLeave={() => {
+        if (hoverD !== null) {
+          setHoverD(null);
+          onHover?.(null);
+        }
+      }}
+    >
       <canvas ref={canvasRef} className="absolute inset-0" />
       {!hasData && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-ink/50">
@@ -309,7 +372,38 @@ export function ProfileChart({ polyline, scatter, verticalExaggeration = 'auto' 
               </text>
             );
           })}
+          {hoverSample && hoverD !== null && (
+            <>
+              <line
+                x1={xPxScale(hoverD)}
+                x2={xPxScale(hoverD)}
+                y1={plotTop}
+                y2={plotBottom}
+                stroke="rgba(26, 39, 51, 0.5)"
+                strokeDasharray="3 3"
+              />
+              <circle
+                cx={xPxScale(hoverSample.d)}
+                cy={yPxScale(hoverSample.z)}
+                r={4}
+                fill="#1cb5a8"
+                stroke="white"
+                strokeWidth={2}
+              />
+            </>
+          )}
         </svg>
+      )}
+      {hoverSample && hoverD !== null && size.width > 0 && domain && (
+        <div
+          className="absolute pointer-events-none rounded bg-ink text-white text-[11px] px-2 py-1 shadow-md"
+          style={{
+            left: Math.min(xPxScale(hoverD) + 10, size.width - 110),
+            top: Math.max(yPxScale(hoverSample.z) - 28, 4),
+          }}
+        >
+          {hoverSample.d.toFixed(1)} m · {hoverSample.z.toFixed(2)} m
+        </div>
       )}
     </div>
   );

@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type SceneView from '@arcgis/core/views/SceneView.js';
 import type ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
 import type PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
 import type Polyline from '@arcgis/core/geometry/Polyline.js';
+import Graphic from '@arcgis/core/Graphic.js';
+import GraphicsLayer from '@arcgis/core/layers/GraphicsLayer.js';
+import Point from '@arcgis/core/geometry/Point.js';
+import PointSymbol3D from '@arcgis/core/symbols/PointSymbol3D.js';
+import IconSymbol3DLayer from '@arcgis/core/symbols/IconSymbol3DLayer.js';
 import { ProfileChart, type VerticalExaggeration } from './profile/ProfileChart';
 import {
   sampleSlabAlongPolyline,
@@ -24,6 +29,52 @@ function collectPointCloudLayers(view: SceneView): PointCloudLayer[] {
   return result;
 }
 
+function hoverMarkerSymbol() {
+  return new PointSymbol3D({
+    symbolLayers: [
+      new IconSymbol3DLayer({
+        size: 14,
+        resource: { primitive: 'circle' },
+        material: { color: [255, 220, 0, 0.85] },
+        outline: { color: [255, 140, 0, 1], size: 2.5 },
+      }),
+    ],
+  });
+}
+
+/**
+ * Walks the polyline accumulating distance and interpolates a world point
+ * at the given distance `d` from the start. Returns null if d is outside
+ * the polyline's length or the polyline is empty.
+ */
+function worldPointAtDistance(
+  polyline: Polyline,
+  d: number,
+): { x: number; y: number; z: number } | null {
+  let cumulative = 0;
+  for (const path of polyline.paths) {
+    let last: number[] | null = null;
+    for (const v of path) {
+      if (last) {
+        const dx = (v[0] ?? 0) - (last[0] ?? 0);
+        const dy = (v[1] ?? 0) - (last[1] ?? 0);
+        const segLen = Math.sqrt(dx * dx + dy * dy);
+        if (cumulative + segLen >= d) {
+          const t = segLen > 0 ? (d - cumulative) / segLen : 0;
+          return {
+            x: (last[0] ?? 0) + dx * t,
+            y: (last[1] ?? 0) + dy * t,
+            z: (last[2] ?? 0) + (((v[2] ?? 0) - (last[2] ?? 0)) * t),
+          };
+        }
+        cumulative += segLen;
+      }
+      last = v;
+    }
+  }
+  return null;
+}
+
 /**
  * Bottom-left panel housing our own ProfileChart. The widget mount has
  * been replaced — we read analysis.geometry directly and feed the
@@ -36,6 +87,25 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
   const [scatter, setScatter] = useState<ScatterPoint[]>([]);
   const [scatterLoading, setScatterLoading] = useState(false);
   const [exaggeration, setExaggeration] = useState<VerticalExaggeration>('auto');
+
+  // 3D hover marker — a GraphicsLayer that holds a single yellow ring
+  // moved to the world point corresponding to the chart cursor.
+  const hoverLayerRef = useRef<GraphicsLayer | null>(null);
+  const hoverGraphicRef = useRef<Graphic | null>(null);
+
+  useEffect(() => {
+    const map = view.map;
+    if (!map) return;
+    const layer = new GraphicsLayer({ listMode: 'hide' });
+    map.add(layer);
+    hoverLayerRef.current = layer;
+    return () => {
+      map.remove(layer);
+      layer.destroy();
+      hoverLayerRef.current = null;
+      hoverGraphicRef.current = null;
+    };
+  }, [view]);
 
   useEffect(() => {
     setPolyline(analysis.geometry ?? null);
@@ -75,6 +145,39 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
       });
     return () => controller.abort();
   }, [view, polyline]);
+
+  const handleHover = useCallback(
+    (d: number | null) => {
+      const layer = hoverLayerRef.current;
+      if (!layer || !polyline) return;
+      if (d === null) {
+        if (hoverGraphicRef.current) {
+          layer.remove(hoverGraphicRef.current);
+          hoverGraphicRef.current = null;
+        }
+        return;
+      }
+      const pos = worldPointAtDistance(polyline, d);
+      if (!pos) return;
+      const point = new Point({
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        hasZ: true,
+        spatialReference: polyline.spatialReference,
+      });
+      if (!hoverGraphicRef.current) {
+        hoverGraphicRef.current = new Graphic({
+          geometry: point,
+          symbol: hoverMarkerSymbol(),
+        });
+        layer.add(hoverGraphicRef.current);
+      } else {
+        hoverGraphicRef.current.geometry = point;
+      }
+    },
+    [polyline],
+  );
 
   return (
     <section
@@ -128,6 +231,7 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
           polyline={polyline}
           scatter={scatter}
           verticalExaggeration={exaggeration}
+          onHover={handleHover}
         />
       </div>
     </section>
