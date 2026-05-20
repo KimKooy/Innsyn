@@ -11,6 +11,7 @@ import ElevationProfileLineGround from '@arcgis/core/analysis/ElevationProfile/E
 import ElevationProfileLineQuery from '@arcgis/core/analysis/ElevationProfile/ElevationProfileLineQuery.js';
 import SliceAnalysis from '@arcgis/core/analysis/SliceAnalysis.js';
 import { PointCloudElevationSource } from './PointCloudElevationSource';
+import { drawPolylineWithPointCloudSnap } from './draw-polyline';
 import { snapPolylineToPointCloud } from './snap-polyline';
 import { formatResult, type FormattedMeasurement } from './measurement-format';
 
@@ -114,6 +115,43 @@ export function useSceneMeasurements(view: SceneView | null) {
       const removeEarlyItem = () => {
         if (earlyItemId) setItems((curr) => curr.filter((m) => m.id !== earlyItemId));
       };
+
+      // For elevation profile on a scene that has a point cloud, replace
+      // Esri's place() with our own snap-to-splat drawing loop. place()
+      // captures clicks at the camera-ray intersection with the ground
+      // (z=0 when world-elevation doesn't cover the area), so vertices
+      // never land on the splats the user is visually clicking. Our
+      // custom flow shows a yellow snap ring under the cursor and commits
+      // each click AT that ring's splat. For mesh-only scenes place()
+      // works fine.
+      if (tool === 'profile' && analysis instanceof ElevationProfileAnalysis) {
+        const pcLayers: PointCloudLayer[] = [];
+        view.map?.allLayers.forEach((layer) => {
+          if (layer.type === 'point-cloud') pcLayers.push(layer as PointCloudLayer);
+        });
+        if (pcLayers.length > 0) {
+          try {
+            const polyline = await drawPolylineWithPointCloudSnap(view, pcLayers, {
+              signal: ac.signal,
+            });
+            if (ac.signal.aborted) {
+              view.analyses.remove(analysis);
+              removeEarlyItem();
+              return;
+            }
+            analysis.geometry = polyline;
+          } catch {
+            view.analyses.remove(analysis);
+            removeEarlyItem();
+          } finally {
+            if (abortRef.current === ac) {
+              abortRef.current = null;
+              setActiveTool((curr) => (curr === tool ? null : curr));
+            }
+          }
+          return;
+        }
+      }
 
       let av: AnalysisViewWithPlace;
       try {

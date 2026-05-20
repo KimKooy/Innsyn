@@ -8,7 +8,8 @@ const hints: Record<ToolId, string> = {
   distance: 'Klikk to punkter i scenen for å måle avstand.',
   area: 'Klikk hjørner i scenen. Dobbeltklikk for å avslutte polygonet.',
   volume: 'Tegn et polygon (dobbeltklikk for å avslutte), så et flytt-håndtak for målflaten.',
-  profile: 'Klikk punkter langs linjen i scenen. Dobbeltklikk for å avslutte og se høydeprofilen.',
+  profile:
+    'Beveg musen over punktskyen — gul ring følger nærmeste splat. Klikk for å plassere vertex, dobbeltklikk for å avslutte. Esc avbryter.',
   slice: 'Klikk i scenen for å plassere kuttplanet, så dra håndtakene for å justere.',
 };
 
