@@ -53,12 +53,17 @@ export function useAccount(): AccountState {
 
   const signIn = useCallback(async () => {
     if (!authConfigured) return;
-    await instance.loginPopup(loginRequest);
+    // Use redirect flow rather than popup. Popups are flaky when the user is
+    // already SSO'd into Entra (silent flow gets lost in the popup→parent
+    // postMessage handshake) and Edge/Chrome popup blockers can swallow
+    // them on first click. Redirect re-loads the SPA after auth and MSAL
+    // picks up the hash on init.
+    await instance.loginRedirect(loginRequest);
   }, [instance]);
 
   const signOut = useCallback(async () => {
     if (!authConfigured || !account) return;
-    await instance.logoutPopup({ account });
+    await instance.logoutRedirect({ account });
   }, [account, instance]);
 
   return {
