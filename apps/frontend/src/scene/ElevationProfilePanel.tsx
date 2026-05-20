@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type SceneView from '@arcgis/core/views/SceneView.js';
 import type ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
 import type PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
@@ -76,6 +76,96 @@ function worldPointAtDistance(
 }
 
 /**
+ * Returns the compass azimuth (degrees, 0=N, 90=E) of the polyline segment
+ * containing distance `d`. Used to point the camera perpendicular to the
+ * line so click-to-fly lands on a useful cross-section view.
+ */
+function azimuthAtDistance(polyline: Polyline, d: number): number {
+  let cumulative = 0;
+  for (const path of polyline.paths) {
+    let last: number[] | null = null;
+    for (const v of path) {
+      if (last) {
+        const dx = (v[0] ?? 0) - (last[0] ?? 0);
+        const dy = (v[1] ?? 0) - (last[1] ?? 0);
+        const segLen = Math.sqrt(dx * dx + dy * dy);
+        if (cumulative + segLen >= d) {
+          return (Math.atan2(dx, dy) * 180) / Math.PI;
+        }
+        cumulative += segLen;
+      }
+      last = v;
+    }
+  }
+  return 0;
+}
+
+type ProfileStats = {
+  length: number;
+  zMin: number;
+  zMax: number;
+  dMin: number; // distance where zMin lives
+  dMax: number; // distance where zMax lives
+  steepestD: number;
+  steepestPercent: number;
+};
+
+function computeStats(polyline: Polyline | null): ProfileStats | null {
+  if (!polyline) return null;
+  let length = 0;
+  let zMin = Infinity;
+  let zMax = -Infinity;
+  let dMin = 0;
+  let dMaxAt = 0;
+  let steepestD = 0;
+  let steepest = 0;
+  let cumulative = 0;
+  let last: number[] | null = null;
+  for (const path of polyline.paths) {
+    for (const v of path) {
+      const x = v[0];
+      const y = v[1];
+      const z = v[2] ?? 0;
+      if (typeof x !== 'number' || typeof y !== 'number') continue;
+      if (last) {
+        const dx = x - (last[0] ?? 0);
+        const dy = y - (last[1] ?? 0);
+        const segLen = Math.sqrt(dx * dx + dy * dy);
+        const dz = Math.abs(z - (last[2] ?? 0));
+        if (segLen > 0) {
+          const slope = dz / segLen;
+          if (slope > steepest) {
+            steepest = slope;
+            steepestD = cumulative + segLen / 2;
+          }
+        }
+        cumulative += segLen;
+      }
+      if (z < zMin) {
+        zMin = z;
+        dMin = cumulative;
+      }
+      if (z > zMax) {
+        zMax = z;
+        dMaxAt = cumulative;
+      }
+      last = [x, y, z];
+    }
+  }
+  length = cumulative;
+  if (!Number.isFinite(zMin) || !Number.isFinite(zMax)) return null;
+  return {
+    length,
+    zMin,
+    zMax,
+    dMin,
+    dMax: dMaxAt,
+    steepestD,
+    steepestPercent: steepest * 100,
+  };
+}
+
+/**
  * Bottom-left panel housing our own ProfileChart. The widget mount has
  * been replaced — we read analysis.geometry directly and feed the
  * polyline + a slab-sampled scatter of point-cloud splats to the chart.
@@ -146,6 +236,35 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
     return () => controller.abort();
   }, [view, polyline]);
 
+  const stats = useMemo(() => computeStats(polyline), [polyline]);
+
+  const flyToDistance = useCallback(
+    (d: number) => {
+      if (!polyline) return;
+      const pos = worldPointAtDistance(polyline, d);
+      if (!pos) return;
+      const azimuth = azimuthAtDistance(polyline, d);
+      const target = new Point({
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        hasZ: true,
+        spatialReference: polyline.spatialReference,
+      });
+      // Heading perpendicular to the segment so we see the cross-section
+      // dead-on. Scale picks a comfortable close-up.
+      view
+        .goTo(
+          { target, tilt: 65, heading: azimuth + 90, scale: 500 },
+          { duration: 800 },
+        )
+        .catch(() => {
+          // user-cancellable; ignore
+        });
+    },
+    [polyline, view],
+  );
+
   const handleHover = useCallback(
     (d: number | null) => {
       const layer = hoverLayerRef.current;
@@ -181,7 +300,7 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
 
   return (
     <section
-      className="absolute left-3 right-[19.5rem] bottom-3 z-10 h-64 rounded-lg bg-white shadow-md border border-line flex flex-col overflow-hidden"
+      className="absolute left-3 right-[19.5rem] bottom-3 z-10 h-72 rounded-lg bg-white shadow-md border border-line flex flex-col overflow-hidden"
       aria-label="Høydeprofil"
     >
       <header className="px-3 py-2 border-b border-line flex items-center justify-between flex-none gap-3">
@@ -226,12 +345,49 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
           </button>
         </div>
       </header>
+      {stats && (
+        <div className="px-3 py-1.5 border-b border-line text-[11px] text-ink/70 flex items-center gap-3 flex-wrap">
+          <span>
+            Lengde <strong className="text-ink">{stats.length.toFixed(1)} m</strong>
+          </span>
+          <span>
+            Δh{' '}
+            <strong className="text-ink">{(stats.zMax - stats.zMin).toFixed(1)} m</strong>
+          </span>
+          <button
+            type="button"
+            onClick={() => flyToDistance(stats.dMin)}
+            className="rounded px-1.5 py-0.5 hover:bg-soft text-ink"
+            title="Fly til laveste punkt"
+          >
+            ↓ Lavest <span className="text-ink/60">{stats.zMin.toFixed(1)} m</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => flyToDistance(stats.dMax)}
+            className="rounded px-1.5 py-0.5 hover:bg-soft text-ink"
+            title="Fly til høyeste punkt"
+          >
+            ↑ Høyest <span className="text-ink/60">{stats.zMax.toFixed(1)} m</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => flyToDistance(stats.steepestD)}
+            className="rounded px-1.5 py-0.5 hover:bg-soft text-ink"
+            title="Fly til bratteste segment"
+          >
+            ↗ Brattest{' '}
+            <span className="text-ink/60">{stats.steepestPercent.toFixed(0)}%</span>
+          </button>
+        </div>
+      )}
       <div className="flex-1 min-h-0">
         <ProfileChart
           polyline={polyline}
           scatter={scatter}
           verticalExaggeration={exaggeration}
           onHover={handleHover}
+          onClick={flyToDistance}
         />
       </div>
     </section>

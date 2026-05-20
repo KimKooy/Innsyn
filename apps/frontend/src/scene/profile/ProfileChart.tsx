@@ -136,6 +136,8 @@ type Props = {
   verticalExaggeration?: VerticalExaggeration;
   /** Notified on cursor hover. `d` is the polyline distance in meters, or null when off the chart. */
   onHover?: (d: number | null) => void;
+  /** Notified when the user clicks a point on the chart. */
+  onClick?: (d: number) => void;
 };
 
 export function ProfileChart({
@@ -143,6 +145,7 @@ export function ProfileChart({
   scatter,
   verticalExaggeration = 'auto',
   onHover,
+  onClick,
 }: Props) {
   const scatterPoints = scatter ?? [];
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -326,6 +329,15 @@ export function ProfileChart({
           onHover?.(null);
         }
       }}
+      onClick={(e) => {
+        if (!hasData || !containerRef.current || !domain) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        if (x < plotLeft || x > plotRight) return;
+        const d = ((x - plotLeft) / Math.max(plotW, 1)) * domain.dMax;
+        onClick?.(d);
+      }}
+      style={{ cursor: hasData ? 'crosshair' : 'default' }}
     >
       <canvas ref={canvasRef} className="absolute inset-0" />
       {!hasData && (
