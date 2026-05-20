@@ -38,7 +38,7 @@ const SNAP_YELLOW = [255, 220, 0] as const;
 const SNAP_ORANGE = [255, 140, 0] as const;
 
 const STICKY_PX = 24;
-const DENSIFY_SPACING_M = 0.5;
+const DENSIFY_SPACING_M = 0.25;
 
 function snapSymbol() {
   return new PointSymbol3D({

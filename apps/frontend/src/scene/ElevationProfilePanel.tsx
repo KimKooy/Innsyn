@@ -14,11 +14,17 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
   // The widget reads view + analysis from properties (not attributes); both
   // must be set imperatively after the element is in the DOM. The analysis
   // already carries the profile-line config so we don't touch widget.profiles.
+  //
+  // uniformChartScaling=true gives the chart 1:1 X/Y scale — elevation
+  // differences are drawn at the same units-per-pixel as horizontal
+  // distance, so e.g. a 5m hill across a 50m path actually LOOKS like a
+  // 1:10 ramp instead of being vertically stretched.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.view = view;
     el.analysis = analysis;
+    el.uniformChartScaling = true;
   }, [view, analysis]);
 
   return (
