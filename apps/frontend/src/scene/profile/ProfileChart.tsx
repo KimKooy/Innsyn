@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type Polyline from '@arcgis/core/geometry/Polyline.js';
+import type { ScatterPoint } from './profile-sampling';
 
 /**
  * Custom elevation-profile chart. Replaces <arcgis-elevation-profile>
@@ -19,6 +20,8 @@ const MARGIN = { top: 12, right: 16, bottom: 28, left: 56 } as const;
 const LINE_COLOR = '#1cb5a8';
 const GRID_COLOR = 'rgba(26, 39, 51, 0.06)';
 const AXIS_COLOR = 'rgba(26, 39, 51, 0.6)';
+const SCATTER_COLOR = 'rgba(26, 39, 51, 0.22)';
+const SCATTER_RADIUS = 1.4;
 
 function polylineToSamples(polyline: Polyline): Sample[] {
   const samples: Sample[] = [];
@@ -69,7 +72,7 @@ type Domain = {
   zMax: number;
 };
 
-function computeDomain(samples: Sample[]): Domain | null {
+function computeDomain(samples: Sample[], scatter: ScatterPoint[]): Domain | null {
   if (samples.length === 0) return null;
   const dMax = samples[samples.length - 1]!.d;
   let zMin = Infinity;
@@ -77,6 +80,13 @@ function computeDomain(samples: Sample[]): Domain | null {
   for (const s of samples) {
     if (s.z < zMin) zMin = s.z;
     if (s.z > zMax) zMax = s.z;
+  }
+  // Let the scatter expand the z range so vegetation / structures aren't
+  // clipped, but only above the line (vegetation is up); below is usually
+  // ground we already see in the curve.
+  for (const p of scatter) {
+    if (p.z > zMax) zMax = p.z;
+    if (p.z < zMin) zMin = p.z;
   }
   if (!Number.isFinite(zMin) || !Number.isFinite(zMax)) return null;
   if (zMin === zMax) {
@@ -92,9 +102,11 @@ function computeDomain(samples: Sample[]): Domain | null {
 
 type Props = {
   polyline: Polyline | null;
+  scatter?: ScatterPoint[];
 };
 
-export function ProfileChart({ polyline }: Props) {
+export function ProfileChart({ polyline, scatter }: Props) {
+  const scatterPoints = scatter ?? [];
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -103,7 +115,10 @@ export function ProfileChart({ polyline }: Props) {
     () => (polyline ? polylineToSamples(polyline) : []),
     [polyline],
   );
-  const domain = useMemo(() => computeDomain(samples), [samples]);
+  const domain = useMemo(
+    () => computeDomain(samples, scatterPoints),
+    [samples, scatterPoints],
+  );
 
   useEffect(() => {
     const el = containerRef.current;
@@ -172,6 +187,20 @@ export function ProfileChart({ polyline }: Props) {
     ctx.lineTo(plotRight, plotBottom);
     ctx.stroke();
 
+    // Scatter (point-cloud splats inside the slab). Drawn BEFORE the
+    // line so the line stays on top — gives a "density cloud" effect.
+    if (scatterPoints.length > 0) {
+      ctx.fillStyle = SCATTER_COLOR;
+      for (const p of scatterPoints) {
+        if (p.d < 0 || p.d > domain.dMax + 1e-6) continue;
+        const x = xScale(p.d);
+        const y = yScale(p.z);
+        ctx.beginPath();
+        ctx.arc(x, y, SCATTER_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     // Profile line
     ctx.strokeStyle = LINE_COLOR;
     ctx.lineWidth = 2;
@@ -185,7 +214,7 @@ export function ProfileChart({ polyline }: Props) {
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-  }, [domain, samples, size]);
+  }, [domain, samples, scatterPoints, size]);
 
   const ticks = useMemo(() => {
     if (!domain || size.width === 0) return null;
