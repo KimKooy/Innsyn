@@ -45,6 +45,44 @@ function polylineToSamples(polyline: Polyline): Sample[] {
   return samples;
 }
 
+const SCATTER_BIN_M = 0.25;
+
+/**
+ * When a scatter cloud is present, derive the chart's line from it
+ * instead of from the polyline's z values. Bin the scatter by distance
+ * (0.25m bins) and take the topmost z per bin → a curve that follows
+ * the actual cloud surface, not the often-linear-interpolated polyline
+ * the snap-densify path produces. The polyline's first and last
+ * vertices are always preserved as anchors so the chart reaches all
+ * the way across the user's drawn range.
+ */
+function buildLineSamples(polylineSamples: Sample[], scatter: ScatterPoint[]): Sample[] {
+  if (polylineSamples.length === 0) return [];
+  if (scatter.length === 0) return polylineSamples;
+
+  const bins = new Map<number, number>();
+  for (const p of scatter) {
+    const binIdx = Math.floor(p.d / SCATTER_BIN_M);
+    const prev = bins.get(binIdx);
+    if (prev === undefined || p.z > prev) bins.set(binIdx, p.z);
+  }
+
+  const first = polylineSamples[0]!;
+  const last = polylineSamples[polylineSamples.length - 1]!;
+  const polylineLength = last.d;
+
+  const sorted = Array.from(bins.entries()).sort((a, b) => a[0] - b[0]);
+  const result: Sample[] = [first];
+  for (const [binIdx, z] of sorted) {
+    const d = (binIdx + 0.5) * SCATTER_BIN_M;
+    if (d > first.d + 1e-3 && d < polylineLength - 1e-3) {
+      result.push({ d, z });
+    }
+  }
+  result.push(last);
+  return result;
+}
+
 /**
  * Generate "nice" tick values for an axis spanning [min, max] aiming at
  * roughly `target` ticks. Returns rounded multiples of 1/2/5×10^n.
@@ -152,10 +190,11 @@ export function ProfileChart({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
-  const samples = useMemo(
-    () => (polyline ? polylineToSamples(polyline) : []),
-    [polyline],
-  );
+  const samples = useMemo(() => {
+    if (!polyline) return [];
+    const polylineSamples = polylineToSamples(polyline);
+    return buildLineSamples(polylineSamples, scatterPoints);
+  }, [polyline, scatterPoints]);
   const plotW = Math.max(size.width - MARGIN.left - MARGIN.right, 1);
   const plotH = Math.max(size.height - MARGIN.top - MARGIN.bottom, 1);
   const domain = useMemo(

@@ -3,14 +3,18 @@ import type SceneView from '@arcgis/core/views/SceneView.js';
 import type ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
 import type PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
 import type Polyline from '@arcgis/core/geometry/Polyline.js';
+import Collection from '@arcgis/core/core/Collection.js';
 import Graphic from '@arcgis/core/Graphic.js';
 import GraphicsLayer from '@arcgis/core/layers/GraphicsLayer.js';
 import Point from '@arcgis/core/geometry/Point.js';
 import PointSymbol3D from '@arcgis/core/symbols/PointSymbol3D.js';
 import IconSymbol3DLayer from '@arcgis/core/symbols/IconSymbol3DLayer.js';
+import LineSymbol3D from '@arcgis/core/symbols/LineSymbol3D.js';
+import LineSymbol3DLayer from '@arcgis/core/symbols/LineSymbol3DLayer.js';
 import { ProfileChart, type VerticalExaggeration } from './profile/ProfileChart';
 import {
   sampleSlabAlongPolyline,
+  DEFAULT_SLAB_M,
   type ScatterPoint,
 } from './profile/profile-sampling';
 
@@ -37,6 +41,17 @@ function hoverMarkerSymbol() {
         resource: { primitive: 'circle' },
         material: { color: [255, 220, 0, 0.85] },
         outline: { color: [255, 140, 0, 1], size: 2.5 },
+      }),
+    ],
+  });
+}
+
+function profileLineSymbol() {
+  return new LineSymbol3D({
+    symbolLayers: [
+      new LineSymbol3DLayer({
+        size: 2.5,
+        material: { color: [28, 181, 168, 1] },
       }),
     ],
   });
@@ -197,6 +212,55 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
     };
   }, [view]);
 
+  // Silence Esri's analysis-line rendering: setting profiles to empty
+  // stops the SDK from drawing its Ground/Scene/Query lines in 3D, which
+  // were re-evaluating per camera move and looking unstable. We render
+  // the user-drawn polyline ourselves on a dedicated GraphicsLayer below,
+  // which is rock-solid (the geometry just doesn't change unless the user
+  // redraws or edits).
+  useEffect(() => {
+    analysis.profiles = new Collection();
+  }, [analysis]);
+
+  // Stable 3D rendering of the drawn polyline.
+  const lineLayerRef = useRef<GraphicsLayer | null>(null);
+  const lineGraphicRef = useRef<Graphic | null>(null);
+
+  useEffect(() => {
+    const map = view.map;
+    if (!map) return;
+    const layer = new GraphicsLayer({ listMode: 'hide' });
+    map.add(layer);
+    lineLayerRef.current = layer;
+    return () => {
+      map.remove(layer);
+      layer.destroy();
+      lineLayerRef.current = null;
+      lineGraphicRef.current = null;
+    };
+  }, [view]);
+
+  useEffect(() => {
+    const layer = lineLayerRef.current;
+    if (!layer) return;
+    if (!polyline) {
+      if (lineGraphicRef.current) {
+        layer.remove(lineGraphicRef.current);
+        lineGraphicRef.current = null;
+      }
+      return;
+    }
+    if (!lineGraphicRef.current) {
+      lineGraphicRef.current = new Graphic({
+        geometry: polyline,
+        symbol: profileLineSymbol(),
+      });
+      layer.add(lineGraphicRef.current);
+    } else {
+      lineGraphicRef.current.geometry = polyline;
+    }
+  }, [polyline]);
+
   useEffect(() => {
     setPolyline(analysis.geometry ?? null);
     const handle = analysis.watch('geometry', (geom: Polyline | null | undefined) => {
@@ -311,7 +375,7 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
           )}
           {!scatterLoading && scatter.length > 0 && (
             <span className="text-xs text-ink/50">
-              {scatter.length.toLocaleString('no-NO')} punkter i ±1m-slab
+              {scatter.length.toLocaleString('no-NO')} punkter i ±{DEFAULT_SLAB_M.toFixed(1)}m-slab
             </span>
           )}
         </div>

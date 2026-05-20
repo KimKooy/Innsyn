@@ -23,7 +23,7 @@ export type ScatterPoint = { d: number; z: number };
 type Cumulative = { x: number; y: number; d: number };
 
 /** Half-width of the slab in meters. Total slab thickness = 2 × this. */
-export const DEFAULT_SLAB_M = 1.0;
+export const DEFAULT_SLAB_M = 0.1;
 
 /** Hard cap on returned features per layer to keep the chart responsive. */
 const MAX_FEATURES_PER_LAYER = 20000;
