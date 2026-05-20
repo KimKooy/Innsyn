@@ -72,7 +72,12 @@ type Domain = {
   zMax: number;
 };
 
-function computeDomain(samples: Sample[], scatter: ScatterPoint[]): Domain | null {
+export type VerticalExaggeration = 'auto' | 1 | 2 | 5 | 10;
+
+function computeDataRange(
+  samples: Sample[],
+  scatter: ScatterPoint[],
+): { dMax: number; zMin: number; zMax: number } | null {
   if (samples.length === 0) return null;
   const dMax = samples[samples.length - 1]!.d;
   let zMin = Infinity;
@@ -81,9 +86,6 @@ function computeDomain(samples: Sample[], scatter: ScatterPoint[]): Domain | nul
     if (s.z < zMin) zMin = s.z;
     if (s.z > zMax) zMax = s.z;
   }
-  // Let the scatter expand the z range so vegetation / structures aren't
-  // clipped, but only above the line (vegetation is up); below is usually
-  // ground we already see in the curve.
   for (const p of scatter) {
     if (p.z > zMax) zMax = p.z;
     if (p.z < zMin) zMin = p.z;
@@ -100,12 +102,41 @@ function computeDomain(samples: Sample[], scatter: ScatterPoint[]): Domain | nul
   return { dMax, zMin, zMax };
 }
 
+function computeDomain(
+  samples: Sample[],
+  scatter: ScatterPoint[],
+  plotW: number,
+  plotH: number,
+  exaggeration: VerticalExaggeration,
+): Domain | null {
+  const raw = computeDataRange(samples, scatter);
+  if (!raw) return null;
+  if (exaggeration === 'auto' || plotW <= 0 || plotH <= 0) {
+    return raw;
+  }
+  // Exaggeration is the multiple of vertical scale relative to horizontal:
+  //   vPxPerM = k × hPxPerM
+  // Centre the data within the resulting visible z-range; the surrounding
+  // padding stays empty so the chart's visible tilt actually matches k.
+  const hPxPerM = plotW / Math.max(raw.dMax, 1);
+  const vPxPerM = exaggeration * hPxPerM;
+  const zRangeVisible = plotH / Math.max(vPxPerM, 1e-9);
+  const centre = (raw.zMin + raw.zMax) / 2;
+  return {
+    dMax: raw.dMax,
+    zMin: centre - zRangeVisible / 2,
+    zMax: centre + zRangeVisible / 2,
+  };
+}
+
 type Props = {
   polyline: Polyline | null;
   scatter?: ScatterPoint[];
+  /** 'auto' fits the data to the canvas; numeric k forces v-scale = k × h-scale. */
+  verticalExaggeration?: VerticalExaggeration;
 };
 
-export function ProfileChart({ polyline, scatter }: Props) {
+export function ProfileChart({ polyline, scatter, verticalExaggeration = 'auto' }: Props) {
   const scatterPoints = scatter ?? [];
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -115,9 +146,11 @@ export function ProfileChart({ polyline, scatter }: Props) {
     () => (polyline ? polylineToSamples(polyline) : []),
     [polyline],
   );
+  const plotW = Math.max(size.width - MARGIN.left - MARGIN.right, 1);
+  const plotH = Math.max(size.height - MARGIN.top - MARGIN.bottom, 1);
   const domain = useMemo(
-    () => computeDomain(samples, scatterPoints),
-    [samples, scatterPoints],
+    () => computeDomain(samples, scatterPoints, plotW, plotH, verticalExaggeration),
+    [samples, scatterPoints, plotW, plotH, verticalExaggeration],
   );
 
   useEffect(() => {
@@ -158,13 +191,13 @@ export function ProfileChart({ polyline, scatter }: Props) {
     const plotRight = width - MARGIN.right;
     const plotTop = MARGIN.top;
     const plotBottom = height - MARGIN.bottom;
-    const plotW = Math.max(plotRight - plotLeft, 1);
-    const plotH = Math.max(plotBottom - plotTop, 1);
+    const innerW = Math.max(plotRight - plotLeft, 1);
+    const innerH = Math.max(plotBottom - plotTop, 1);
 
     const xScale = (v: number) =>
-      plotLeft + (v / Math.max(domain.dMax, 1)) * plotW;
+      plotLeft + (v / Math.max(domain.dMax, 1)) * innerW;
     const yScale = (v: number) =>
-      plotBottom - ((v - domain.zMin) / (domain.zMax - domain.zMin || 1)) * plotH;
+      plotBottom - ((v - domain.zMin) / (domain.zMax - domain.zMin || 1)) * innerH;
 
     // Grid (y-axis horizontal lines)
     const yTicks = niceTicks(domain.zMin, domain.zMax, 5);
@@ -227,10 +260,7 @@ export function ProfileChart({ polyline, scatter }: Props) {
   const hasData = samples.length > 0 && domain !== null;
   const plotLeft = MARGIN.left;
   const plotRight = size.width - MARGIN.right;
-  const plotTop = MARGIN.top;
   const plotBottom = size.height - MARGIN.bottom;
-  const plotW = Math.max(plotRight - plotLeft, 1);
-  const plotH = Math.max(plotBottom - plotTop, 1);
 
   return (
     <div ref={containerRef} className="relative w-full h-full">

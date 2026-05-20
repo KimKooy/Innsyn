@@ -3,7 +3,7 @@ import type SceneView from '@arcgis/core/views/SceneView.js';
 import type ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
 import type PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
 import type Polyline from '@arcgis/core/geometry/Polyline.js';
-import { ProfileChart } from './profile/ProfileChart';
+import { ProfileChart, type VerticalExaggeration } from './profile/ProfileChart';
 import {
   sampleSlabAlongPolyline,
   type ScatterPoint,
@@ -35,6 +35,7 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
   );
   const [scatter, setScatter] = useState<ScatterPoint[]>([]);
   const [scatterLoading, setScatterLoading] = useState(false);
+  const [exaggeration, setExaggeration] = useState<VerticalExaggeration>('auto');
 
   useEffect(() => {
     setPolyline(analysis.geometry ?? null);
@@ -80,8 +81,8 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
       className="absolute left-3 right-[19.5rem] bottom-3 z-10 h-64 rounded-lg bg-white shadow-md border border-line flex flex-col overflow-hidden"
       aria-label="Høydeprofil"
     >
-      <header className="px-3 py-2 border-b border-line flex items-center justify-between flex-none">
-        <div className="flex items-baseline gap-2">
+      <header className="px-3 py-2 border-b border-line flex items-center justify-between flex-none gap-3">
+        <div className="flex items-baseline gap-2 min-w-0">
           <span className="text-sm font-semibold">Høydeprofil</span>
           {scatterLoading && (
             <span className="text-xs text-ink/50">sampler punktsky…</span>
@@ -92,17 +93,42 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Lukk høydeprofil"
-          className="text-ink/70 hover:text-ink text-sm"
-        >
-          ✕
-        </button>
+        <div className="flex items-center gap-2 flex-none">
+          <label className="flex items-center gap-1 text-xs text-ink/60">
+            Vertikal
+            <select
+              value={String(exaggeration)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setExaggeration(
+                  v === 'auto' ? 'auto' : (Number(v) as Exclude<VerticalExaggeration, 'auto'>),
+                );
+              }}
+              className="rounded border border-line bg-white px-1.5 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary/40"
+            >
+              <option value="auto">Auto</option>
+              <option value="1">1:1</option>
+              <option value="2">2×</option>
+              <option value="5">5×</option>
+              <option value="10">10×</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Lukk høydeprofil"
+            className="text-ink/70 hover:text-ink text-sm"
+          >
+            ✕
+          </button>
+        </div>
       </header>
       <div className="flex-1 min-h-0">
-        <ProfileChart polyline={polyline} scatter={scatter} />
+        <ProfileChart
+          polyline={polyline}
+          scatter={scatter}
+          verticalExaggeration={exaggeration}
+        />
       </div>
     </section>
   );
