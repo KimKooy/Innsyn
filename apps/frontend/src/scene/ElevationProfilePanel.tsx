@@ -3,7 +3,6 @@ import type SceneView from '@arcgis/core/views/SceneView.js';
 import type ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
 import type PointCloudLayer from '@arcgis/core/layers/PointCloudLayer.js';
 import type Polyline from '@arcgis/core/geometry/Polyline.js';
-import Collection from '@arcgis/core/core/Collection.js';
 import Graphic from '@arcgis/core/Graphic.js';
 import GraphicsLayer from '@arcgis/core/layers/GraphicsLayer.js';
 import Point from '@arcgis/core/geometry/Point.js';
@@ -212,17 +211,10 @@ export function ElevationProfilePanel({ view, analysis, onClose }: Props) {
     };
   }, [view]);
 
-  // Silence Esri's analysis-line rendering: setting profiles to empty
-  // stops the SDK from drawing its Ground/Scene/Query lines in 3D, which
-  // were re-evaluating per camera move and looking unstable. We render
-  // the user-drawn polyline ourselves on a dedicated GraphicsLayer below,
-  // which is rock-solid (the geometry just doesn't change unless the user
-  // redraws or edits).
-  useEffect(() => {
-    analysis.profiles = new Collection();
-  }, [analysis]);
-
-  // Stable 3D rendering of the drawn polyline.
+  // Stable 3D rendering of the drawn polyline. The analysis itself ships
+  // with no profile-lines (see buildProfileAnalysis), so Esri draws
+  // nothing for it — this GraphicsLayer is the entire 3D rendering of
+  // the profile.
   const lineLayerRef = useRef<GraphicsLayer | null>(null);
   const lineGraphicRef = useRef<Graphic | null>(null);
 

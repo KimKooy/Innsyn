@@ -6,11 +6,7 @@ import DirectLineMeasurementAnalysis from '@arcgis/core/analysis/DirectLineMeasu
 import AreaMeasurementAnalysis from '@arcgis/core/analysis/AreaMeasurementAnalysis.js';
 import VolumeMeasurementAnalysis from '@arcgis/core/analysis/VolumeMeasurementAnalysis.js';
 import ElevationProfileAnalysis from '@arcgis/core/analysis/ElevationProfileAnalysis.js';
-import ElevationProfileLineScene from '@arcgis/core/analysis/ElevationProfile/ElevationProfileLineScene.js';
-import ElevationProfileLineGround from '@arcgis/core/analysis/ElevationProfile/ElevationProfileLineGround.js';
-import ElevationProfileLineQuery from '@arcgis/core/analysis/ElevationProfile/ElevationProfileLineQuery.js';
 import SliceAnalysis from '@arcgis/core/analysis/SliceAnalysis.js';
-import { PointCloudElevationSource } from './PointCloudElevationSource';
 import { drawPolylineWithPointCloudSnap } from './draw-polyline';
 import { formatResult, type FormattedMeasurement } from './measurement-format';
 
@@ -30,31 +26,13 @@ type AnalysisViewWithPlace = {
   result?: unknown;
 };
 
-function buildProfileAnalysis(view: SceneView): ElevationProfileAnalysis {
-  const analysis = new ElevationProfileAnalysis({
-    profiles: [
-      new ElevationProfileLineScene({ title: 'Mesh', color: [28, 181, 168] }),
-      new ElevationProfileLineGround({ title: 'Terreng', color: [154, 166, 173] }),
-    ],
-  });
-
-  // Esri's built-in ElevationProfileLineScene does NOT sample point clouds
-  // (only volumetric layers like IntegratedMesh / SceneLayer). For each
-  // PointCloudLayer in the scene, add a custom query line whose source does
-  // a hitTest-per-sample against the layer.
-  view.map?.allLayers.forEach((layer) => {
-    if (layer.type !== 'point-cloud') return;
-    const pcLayer = layer as PointCloudLayer;
-    analysis.profiles.push(
-      new ElevationProfileLineQuery({
-        title: `Punktsky${pcLayer.title ? ` · ${pcLayer.title}` : ''}`,
-        color: [219, 51, 74],
-        source: new PointCloudElevationSource(view, pcLayer),
-      }),
-    );
-  });
-
-  return analysis;
+function buildProfileAnalysis(_view: SceneView): ElevationProfileAnalysis {
+  // Profil 2.0 uses Esri's analysis only as a typed container for the
+  // polyline geometry — the chart is rendered by our own ProfileChart
+  // and the 3D line by a dedicated GraphicsLayer in ElevationProfilePanel.
+  // No profile-lines are configured here, which keeps Esri from drawing
+  // its own (jittery, per-camera-move-resampled) lines in the scene.
+  return new ElevationProfileAnalysis();
 }
 
 function createAnalysis(tool: ToolId, view: SceneView): Analysis {
