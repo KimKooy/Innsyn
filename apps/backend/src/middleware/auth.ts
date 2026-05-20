@@ -32,6 +32,20 @@ function getJwks() {
   return jwks;
 }
 
+/**
+ * Entra v2 tokens issued for a custom API can show up with either the bare
+ * clientId or the `api://<clientId>` form in the `aud` claim depending on
+ * tenant settings. We accept both regardless of which form IT registered
+ * AUTH_AUDIENCE as, so configuration mistakes don't reject valid tokens.
+ */
+function allowedAudiences(): string[] {
+  const configured = config.AUTH_AUDIENCE;
+  if (!configured) return [];
+  const stripped = configured.replace(/^api:\/\//, '');
+  const prefixed = `api://${stripped}`;
+  return Array.from(new Set([configured, stripped, prefixed]));
+}
+
 function extractUser(payload: JWTPayload): AuthenticatedUser {
   const oid = typeof payload.oid === 'string' ? payload.oid : undefined;
   if (!oid) throw new UnauthorizedError('Missing oid claim');
@@ -64,7 +78,7 @@ export const requireAuth: RequestHandler = async (req, _res, next) => {
         `https://login.microsoftonline.com/${config.AUTH_TENANT_ID}/v2.0`,
         `https://sts.windows.net/${config.AUTH_TENANT_ID}/`,
       ],
-      audience: config.AUTH_AUDIENCE,
+      audience: allowedAudiences(),
     });
     req.user = extractUser(payload);
     next();

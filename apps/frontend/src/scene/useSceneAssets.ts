@@ -6,6 +6,7 @@ import Point from '@arcgis/core/geometry/Point.js';
 import PointSymbol3D from '@arcgis/core/symbols/PointSymbol3D.js';
 import IconSymbol3DLayer from '@arcgis/core/symbols/IconSymbol3DLayer.js';
 import type { AssetDTO, CreateAssetInput, ScenePosition } from '@innsyn/shared';
+import { useAccount } from '@/auth/useAccount';
 import {
   ApiError,
   createAsset,
@@ -49,6 +50,7 @@ function assetToGraphic(asset: AssetDTO, view: SceneView) {
 }
 
 export function useSceneAssets(view: SceneView | null, sceneId: string) {
+  const { isAuthenticated, acquireToken } = useAccount();
   const [assets, setAssets] = useState<AssetDTO[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -77,29 +79,40 @@ export function useSceneAssets(view: SceneView | null, sceneId: string) {
     };
   }, [view]);
 
-  // Load assets from API whenever sceneId or view changes.
+  // Load assets from API whenever sceneId, view or auth state changes.
   useEffect(() => {
     if (!view) return;
+    if (!isAuthenticated) {
+      // No token available — skip the call; users see an empty list
+      // (the toolbar status badge surfaces "ikke pålogget" separately).
+      setAssets([]);
+      setStatus('idle');
+      setErrorMessage(null);
+      return;
+    }
     let cancelled = false;
     setStatus('loading');
     setErrorMessage(null);
-    void listAssetsForScene(sceneId)
-      .then((res) => {
+    void (async () => {
+      try {
+        const token = await acquireToken();
+        if (cancelled) return;
+        const res = await listAssetsForScene(sceneId, token);
         if (cancelled) return;
         setAssets(res.assets);
         setStatus('ready');
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (cancelled) return;
         const msg = err instanceof ApiError ? `${err.status}: ${err.message}` : String(err);
         setAssets([]);
         setStatus('error');
         setErrorMessage(msg);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [view, sceneId]);
+  }, [view, sceneId, isAuthenticated, acquireToken]);
 
   // Re-render graphics whenever the asset list or view changes.
   useEffect(() => {
@@ -159,7 +172,8 @@ export function useSceneAssets(view: SceneView | null, sceneId: string) {
         sizeBytes: file.size,
         position: pendingPosition,
       };
-      const result = await createAsset(payload);
+      const token = await acquireToken();
+      const result = await createAsset(payload, token);
       try {
         await uploadToBlob(result.uploadUrl, result.uploadHeaders, file);
       } catch (err) {
@@ -170,19 +184,24 @@ export function useSceneAssets(view: SceneView | null, sceneId: string) {
       }
       // Tell the backend the blob is in place — it flips uploadedAt and the
       // asset becomes visible to list/download.
-      const finalized = await finalizeAsset(result.asset.id);
+      const finalizeToken = await acquireToken();
+      const finalized = await finalizeAsset(result.asset.id, finalizeToken);
       setAssets((curr) => [finalized.asset, ...curr]);
       setPendingPosition(null);
       setSelectedAssetId(finalized.asset.id);
     },
-    [pendingPosition],
+    [pendingPosition, acquireToken],
   );
 
-  const removeAsset = useCallback(async (id: string) => {
-    await deleteAsset(id);
-    setAssets((curr) => curr.filter((a) => a.id !== id));
-    setSelectedAssetId((curr) => (curr === id ? null : curr));
-  }, []);
+  const removeAsset = useCallback(
+    async (id: string) => {
+      const token = await acquireToken();
+      await deleteAsset(id, token);
+      setAssets((curr) => curr.filter((a) => a.id !== id));
+      setSelectedAssetId((curr) => (curr === id ? null : curr));
+    },
+    [acquireToken],
+  );
 
   const selectedAsset = useMemo(
     () => assets.find((a) => a.id === selectedAssetId) ?? null,

@@ -1,3 +1,5 @@
+import { useAccount } from '@/auth/useAccount';
+import { useMe } from '@/auth/useMe';
 import type { SceneConfig } from '@/scene/scenes.config';
 
 type Props = {
@@ -5,6 +7,50 @@ type Props = {
   activeSceneId?: string;
   onSelectScene: (id: string) => void;
 };
+
+function UserChip() {
+  const { isReady, isAuthenticated, account, signIn, signOut } = useAccount();
+  const me = useMe();
+
+  if (!isReady) {
+    return <span className="text-sm text-ink/60">Ikke konfigurert</span>;
+  }
+
+  if (!isAuthenticated || !account) {
+    return (
+      <button
+        type="button"
+        onClick={() => void signIn()}
+        className="rounded bg-primary text-white text-sm px-3 py-1.5 hover:bg-primary/90"
+      >
+        Logg inn
+      </button>
+    );
+  }
+
+  const display =
+    (me.status === 'ready' && me.user.displayName) || account.name || account.username;
+
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <span className="text-ink/80" title={account.username}>
+        {display}
+      </span>
+      {me.status === 'error' && (
+        <span className="text-red-700 text-xs" title={me.message}>
+          (API: feil)
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => void signOut()}
+        className="text-xs text-ink/60 hover:text-ink"
+      >
+        Logg ut
+      </button>
+    </div>
+  );
+}
 
 export function TopBar({ scenes, activeSceneId, onSelectScene }: Props) {
   return (
@@ -29,7 +75,9 @@ export function TopBar({ scenes, activeSceneId, onSelectScene }: Props) {
           </select>
         </label>
       )}
-      <div className="ml-auto text-sm text-ink/60">Ikke pålogget</div>
+      <div className="ml-auto">
+        <UserChip />
+      </div>
     </header>
   );
 }

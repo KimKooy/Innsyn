@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AssetDTO } from '@innsyn/shared';
+import { useAccount } from '@/auth/useAccount';
 import { getDownloadUrl } from './asset-api';
 
 type Props = {
@@ -17,6 +18,7 @@ function isPdf(contentType: string) {
 }
 
 export function AssetDetails({ asset, onClose, onDelete }: Props) {
+  const { acquireToken } = useAccount();
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,17 +26,19 @@ export function AssetDetails({ asset, onClose, onDelete }: Props) {
     let cancelled = false;
     setDownloadUrl(null);
     setError(null);
-    void getDownloadUrl(asset.id)
-      .then((res) => {
+    void (async () => {
+      try {
+        const token = await acquireToken();
+        const res = await getDownloadUrl(asset.id, token);
         if (!cancelled) setDownloadUrl(res.url);
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [asset.id]);
+  }, [asset.id, acquireToken]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
