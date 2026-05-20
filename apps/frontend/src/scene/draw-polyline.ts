@@ -11,24 +11,25 @@ import LineSymbol3DLayer from '@arcgis/core/symbols/LineSymbol3DLayer.js';
 
 /**
  * Interactive polyline-drawing flow with point-cloud snap, modelled after
- * ArcGIS Pro's snap-to-vertex behaviour:
+ * ArcGIS Pro's snap-to-vertex behaviour.
  *
- *   - As the user moves the cursor, hitTest filtered to the point-cloud
- *     layers reports the topmost splat under the pointer. A yellow ring
- *     follows that splat in 3D — preview of where the next click lands.
- *   - "Sticky snap": if hitTest momentarily returns no result (camera ray
- *     hits a gap between splats) we keep the last good snap visible as
- *     long as the cursor has moved less than STICKY_PX pixels — avoids
- *     the ring flickering off as the user moves the mouse.
- *   - Left-click commits a vertex AT the snap point. To make the profile
- *     follow the cloud's curvature even with few clicks, the segment
- *     between the previous vertex and the new one is auto-densified:
- *     every ~DENSIFY_SPACING_M meters along the line we project the
- *     midpoint to screen, hitTest it, and add the snapped result as an
- *     intermediate vertex. Only the user's actual clicks are shown as
- *     visible dots; the densified vertices are silent.
- *   - Double-click finishes the polyline (≥2 user clicks required).
- *     Escape cancels. AbortSignal supported for outside-driven cancel.
+ *   - On pointer-move, hitTest({ include: pcLayers }) reports the topmost
+ *     splat under the cursor. A yellow ring renders in 3D at that splat —
+ *     preview of where the next click commits.
+ *   - "Sticky snap": if hitTest momentarily returns nothing we keep showing
+ *     the previous snap target as long as the cursor has only drifted
+ *     ≤ STICKY_PX pixels from where it was last acquired. Avoids the ring
+ *     flickering through small gaps between splats.
+ *   - Left-click commits a vertex AT the snap point. Clicks without a snap
+ *     target are ignored. Each commit serializes the subsequent densify
+ *     onto a single chain so concurrent clicks can't interleave inserts.
+ *   - The segment between the previous commit and the new one is auto-
+ *     densified at DENSIFY_SPACING_M (in parallel, one hitTest per
+ *     intermediate point) so the chart and the 3D line track the cloud's
+ *     curvature even with few user clicks.
+ *   - Double-click finishes (≥2 user commits required). Escape cancels.
+ *     AbortSignal aborts cleanly: in-flight densify checks signal.aborted
+ *     between awaits and stops mutating the destroyed temp layer.
  */
 
 type Vertex = { x: number; y: number; z: number };
@@ -38,7 +39,7 @@ const SNAP_YELLOW = [255, 220, 0] as const;
 const SNAP_ORANGE = [255, 140, 0] as const;
 
 const STICKY_PX = 24;
-const DENSIFY_SPACING_M = 0.25;
+const DENSIFY_SPACING_M = 0.5;
 
 function snapSymbol() {
   return new PointSymbol3D({
@@ -85,16 +86,27 @@ export async function drawPolylineWithPointCloudSnap(
   const map = view.map;
   if (!map) throw new Error('SceneView.map is not available');
   const sr = view.spatialReference;
+  const signal = options?.signal;
 
-  const userClicks: Vertex[] = []; // ones the user clicked (rendered as dots)
-  const allVertices: Vertex[] = []; // user clicks + auto-densified samples
+  const userClicks: Vertex[] = [];
+  const allVertices: Vertex[] = [];
   let snapped: Vertex | null = null;
   let lastGoodSnap: Vertex | null = null;
   let lastGoodSnapScreen: { x: number; y: number } | null = null;
-  let lastHitSeq = 0;
+
+  // Pointer-move concurrency guard: only one hitTest in flight at a time.
+  // If a move arrives while busy, we remember the latest screen coords and
+  // run them after the current resolves.
+  let moveInFlight = false;
+  let pendingMove: { x: number; y: number } | null = null;
+
+  // Serialize all click-driven densify work onto this chain so two quick
+  // clicks can't interleave their intermediate vertices.
+  let densifyChain: Promise<void> = Promise.resolve();
 
   const tempLayer = new GraphicsLayer({ listMode: 'hide' });
   map.add(tempLayer);
+  let layerDestroyed = false;
 
   const snapGraphic = new Graphic({ symbol: snapSymbol() });
   const committedLineGraphic = new Graphic({ symbol: lineSymbol(2.5, 1) });
@@ -102,6 +114,7 @@ export async function drawPolylineWithPointCloudSnap(
   const vertexGraphics: Graphic[] = [];
 
   function setIncluded(graphic: Graphic, include: boolean) {
+    if (layerDestroyed) return;
     const has = tempLayer.graphics.includes(graphic);
     if (include && !has) tempLayer.add(graphic);
     if (!include && has) tempLayer.remove(graphic);
@@ -118,6 +131,7 @@ export async function drawPolylineWithPointCloudSnap(
   }
 
   function rebuildVertexGraphics() {
+    if (layerDestroyed) return;
     for (const g of vertexGraphics) tempLayer.remove(g);
     vertexGraphics.length = 0;
     for (const v of userClicks) {
@@ -128,6 +142,7 @@ export async function drawPolylineWithPointCloudSnap(
   }
 
   function refreshCommittedLine() {
+    if (layerDestroyed) return;
     if (allVertices.length < 2) {
       setIncluded(committedLineGraphic, false);
       return;
@@ -141,6 +156,7 @@ export async function drawPolylineWithPointCloudSnap(
   }
 
   function refreshPreview() {
+    if (layerDestroyed) return;
     if (allVertices.length === 0 || !snapped) {
       setIncluded(previewLineGraphic, false);
       return;
@@ -155,6 +171,7 @@ export async function drawPolylineWithPointCloudSnap(
   }
 
   function refreshSnapCursor() {
+    if (layerDestroyed) return;
     if (!snapped) {
       setIncluded(snapGraphic, false);
       return;
@@ -163,9 +180,6 @@ export async function drawPolylineWithPointCloudSnap(
     setIncluded(snapGraphic, true);
   }
 
-  /**
-   * Find the topmost cloud splat at a given screen coordinate.
-   */
   async function snapAtScreen(
     screenX: number,
     screenY: number,
@@ -185,11 +199,6 @@ export async function drawPolylineWithPointCloudSnap(
     return null;
   }
 
-  /**
-   * Snap a world-coordinate (x, y) onto the cloud by projecting it to
-   * screen at z=0 and hitTest'ing there. Returns null if no splat is
-   * under the resulting pixel.
-   */
   async function snapAtWorld(x: number, y: number): Promise<Vertex | null> {
     const probe = new Point({ x, y, z: 0, hasZ: true, spatialReference: sr });
     const screen = view.toScreen(probe);
@@ -206,9 +215,10 @@ export async function drawPolylineWithPointCloudSnap(
   }
 
   /**
-   * For the segment between `from` and `to`, insert intermediate vertices
-   * spaced ~DENSIFY_SPACING_M apart, each snapped to the cloud. Falls
-   * back to linear z interpolation when a sample can't be snapped.
+   * Insert vertices spaced ~DENSIFY_SPACING_M apart between `from` and `to`,
+   * each snapped to the cloud. Runs the sample hitTests in parallel; falls
+   * back to linear z when a sample doesn't snap. Bails early if the outer
+   * signal aborts mid-flight.
    */
   async function densifyBetween(from: Vertex, to: Vertex): Promise<Vertex[]> {
     const dx = to.x - from.x;
@@ -216,16 +226,32 @@ export async function drawPolylineWithPointCloudSnap(
     const length = Math.sqrt(dx * dx + dy * dy);
     if (length <= DENSIFY_SPACING_M) return [];
     const steps = Math.floor(length / DENSIFY_SPACING_M);
+
+    const ts: number[] = [];
+    for (let k = 1; k < steps; k++) ts.push(k / steps);
+
+    const results = await Promise.all(
+      ts.map(async (t) => {
+        if (signal?.aborted) return null;
+        const xMid = from.x + dx * t;
+        const yMid = from.y + dy * t;
+        const snap = await snapAtWorld(xMid, yMid);
+        return { t, xMid, yMid, snap };
+      }),
+    );
+    if (signal?.aborted) return [];
+
     const out: Vertex[] = [];
-    for (let k = 1; k < steps; k++) {
-      const t = k / steps;
-      const xMid = from.x + dx * t;
-      const yMid = from.y + dy * t;
-      const snap = await snapAtWorld(xMid, yMid);
-      if (snap) {
-        out.push(snap);
+    for (const r of results) {
+      if (!r) continue;
+      if (r.snap) {
+        out.push(r.snap);
       } else {
-        out.push({ x: xMid, y: yMid, z: from.z + (to.z - from.z) * t });
+        out.push({
+          x: r.xMid,
+          y: r.yMid,
+          z: from.z + (to.z - from.z) * r.t,
+        });
       }
     }
     return out;
@@ -237,17 +263,20 @@ export async function drawPolylineWithPointCloudSnap(
       clickHandle.remove();
       dblHandle.remove();
       document.removeEventListener('keydown', onKey);
-      map.remove(tempLayer);
-      tempLayer.destroy();
+      if (!layerDestroyed) {
+        layerDestroyed = true;
+        map.remove(tempLayer);
+        tempLayer.destroy();
+      }
     };
 
-    if (options?.signal) {
-      if (options.signal.aborted) {
+    if (signal) {
+      if (signal.aborted) {
         cleanup();
         reject(new DOMException('Aborted', 'AbortError'));
         return;
       }
-      options.signal.addEventListener(
+      signal.addEventListener(
         'abort',
         () => {
           cleanup();
@@ -257,62 +286,86 @@ export async function drawPolylineWithPointCloudSnap(
       );
     }
 
+    const runPendingMove = () => {
+      if (!pendingMove || moveInFlight || layerDestroyed) return;
+      const next = pendingMove;
+      pendingMove = null;
+      moveInFlight = true;
+      void snapAtScreen(next.x, next.y)
+        .then((hit) => {
+          if (layerDestroyed) return;
+          if (hit) {
+            snapped = hit;
+            lastGoodSnap = hit;
+            lastGoodSnapScreen = { x: next.x, y: next.y };
+          } else if (lastGoodSnap && lastGoodSnapScreen) {
+            const ddx = next.x - lastGoodSnapScreen.x;
+            const ddy = next.y - lastGoodSnapScreen.y;
+            const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+            snapped = dist <= STICKY_PX ? lastGoodSnap : null;
+          } else {
+            snapped = null;
+          }
+          refreshSnapCursor();
+          refreshPreview();
+        })
+        .finally(() => {
+          moveInFlight = false;
+          // Drain any move that arrived while we were busy.
+          if (pendingMove) runPendingMove();
+        });
+    };
+
     const moveHandle = view.on('pointer-move', (event) => {
-      const seq = ++lastHitSeq;
-      const screenX = event.x;
-      const screenY = event.y;
-      void snapAtScreen(screenX, screenY).then((hit) => {
-        if (seq !== lastHitSeq) return;
-        if (hit) {
-          snapped = hit;
-          lastGoodSnap = hit;
-          lastGoodSnapScreen = { x: screenX, y: screenY };
-        } else if (lastGoodSnap && lastGoodSnapScreen) {
-          // Sticky snap — keep the last good target visible if the cursor
-          // has only drifted a few pixels (likely a gap between splats).
-          const ddx = screenX - lastGoodSnapScreen.x;
-          const ddy = screenY - lastGoodSnapScreen.y;
-          const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-          snapped = dist <= STICKY_PX ? lastGoodSnap : null;
-        } else {
-          snapped = null;
-        }
-        refreshSnapCursor();
-        refreshPreview();
-      });
+      pendingMove = { x: event.x, y: event.y };
+      runPendingMove();
     });
 
     const clickHandle = view.on('click', (event) => {
-      // Only respond to left click; middle/right are for camera nav.
       if (event.button !== 0) return;
-      if (!snapped) return; // no snap target → ignore (Pro behaviour)
+      if (!snapped) return;
       event.stopPropagation();
       const commit = { ...snapped };
       userClicks.push(commit);
-      void (async () => {
-        if (allVertices.length > 0) {
-          const previous = allVertices[allVertices.length - 1]!;
+
+      // Reset sticky-snap so the next pointer-move starts fresh; otherwise
+      // the click position carries over and the ring could re-glue onto an
+      // old splat 24px after the user pans.
+      lastGoodSnap = null;
+      lastGoodSnapScreen = null;
+
+      // Chain this commit's densify after any previous in-flight one so the
+      // intermediate vertices land in the correct order.
+      densifyChain = densifyChain.then(async () => {
+        if (signal?.aborted || layerDestroyed) return;
+        const previous = allVertices[allVertices.length - 1];
+        if (previous) {
           const intermediates = await densifyBetween(previous, commit);
+          if (signal?.aborted || layerDestroyed) return;
           allVertices.push(...intermediates);
         }
         allVertices.push(commit);
         rebuildVertexGraphics();
         refreshCommittedLine();
         refreshPreview();
-      })();
+      });
     });
 
     const dblHandle = view.on('double-click', (event) => {
-      if (event.button !== 0) return;
       event.stopPropagation();
       if (userClicks.length < 2) return;
-      const polyline = new Polyline({
-        paths: [allVertices.map((v) => [v.x, v.y, v.z])],
-        hasZ: true,
-        spatialReference: sr,
+      // Wait for any pending densify to finish so the resolved polyline
+      // includes the intermediates for the last segment.
+      void densifyChain.then(() => {
+        if (layerDestroyed) return;
+        const polyline = new Polyline({
+          paths: [allVertices.map((v) => [v.x, v.y, v.z])],
+          hasZ: true,
+          spatialReference: sr,
+        });
+        cleanup();
+        resolve(polyline);
       });
-      cleanup();
-      resolve(polyline);
     });
 
     const onKey = (e: KeyboardEvent) => {

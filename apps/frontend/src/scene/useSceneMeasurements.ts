@@ -12,7 +12,6 @@ import ElevationProfileLineQuery from '@arcgis/core/analysis/ElevationProfile/El
 import SliceAnalysis from '@arcgis/core/analysis/SliceAnalysis.js';
 import { PointCloudElevationSource } from './PointCloudElevationSource';
 import { drawPolylineWithPointCloudSnap } from './draw-polyline';
-import { snapPolylineToPointCloud } from './snap-polyline';
 import { formatResult, type FormattedMeasurement } from './measurement-format';
 
 export type ToolId = 'distance' | 'area' | 'volume' | 'profile' | 'slice';
@@ -180,24 +179,8 @@ export function useSceneMeasurements(view: SceneView | null) {
           return;
         }
         if (tool === 'profile') {
-          // place() landed the polyline at z=0 because the only continuous
-          // surface in a point-cloud-only scene is the ground at sea level
-          // (world-elevation isn't active in local UTM viewing mode). Lift
-          // each vertex up to the cloud's splats so the visible polyline,
-          // the analysis line in the chart, and the queryElevation samples
-          // all reference the same horizontal position the user originally
-          // clicked at on screen.
-          if (analysis instanceof ElevationProfileAnalysis) {
-            const original = analysis.geometry;
-            const pcLayers: PointCloudLayer[] = [];
-            view.map?.allLayers.forEach((layer) => {
-              if (layer.type === 'point-cloud') pcLayers.push(layer as PointCloudLayer);
-            });
-            if (original && pcLayers.length > 0) {
-              const snapped = await snapPolylineToPointCloud(view, original, pcLayers);
-              if (snapped) analysis.geometry = snapped;
-            }
-          }
+          // Mesh-only profile uses Esri's place() which captures clicks
+          // against the mesh surface directly — no post-snap needed.
           return;
         }
         const formatted = formatResult(tool, av.result);
